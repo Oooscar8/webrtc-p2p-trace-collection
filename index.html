@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC 轨迹采集终端</title>
+</head>
+<body>
+    <button id="startBtn">开启摄像头</button>
+    <button id="callBtn" disabled>建立连接并开始采集</button>
+    <br><br>
+    <video id="localVideo" autoplay muted playsinline style="width: 300px; border: 1px solid black;"></video>
+    <video id="remoteVideo" autoplay playsinline style="width: 300px; border: 1px solid black;"></video>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
