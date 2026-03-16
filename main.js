@@ -8,7 +8,23 @@ let lastBytesReceived = 0, lastBytesSent = 0, lastTime = 0;
 let collectorInterval;
 
 document.getElementById('startBtn').onclick = async () => {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); // 仅采集视频方便测试
+    // 使用 HTML5 Canvas 伪造一个视频流代替真实摄像头
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    
+    // 定时绘制颜色变化的画面，确保 H.264/VP8 编码器有实际内容可发送
+    let color = 0;
+    setInterval(() => {
+        ctx.fillStyle = `hsl(${color % 360}, 100%, 50%)`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        color += 5;
+    }, 33); // 约 30 FPS 的刷新率
+
+    // 从 canvas 捕获视频流，指定每秒帧数
+    localStream = canvas.captureStream(30);
+
     document.getElementById('localVideo').srcObject = localStream;
     document.getElementById('callBtn').disabled = false;
 };
