@@ -14,12 +14,12 @@ document.getElementById('startBtn').onclick = async () => {
     canvas.height = 480;
     const ctx = canvas.getContext('2d');
     
-    // 定时绘制颜色变化的画面，确保 H.264/VP8 编码器有实际内容可发送
-    let color = 0;
+    // 定时绘制高复杂度、高熵的随机噪点画面，确保 H.264/VP8 编码器输出足够的码率，从而触发带宽探测和拥塞控制
     setInterval(() => {
-        ctx.fillStyle = `hsl(${color % 360}, 100%, 50%)`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        color += 5;
+        for (let i = 0; i < 800; i++) {
+            ctx.fillStyle = `rgb(${Math.random()*255}, ${Math.random()*255}, ${Math.random()*255})`;
+            ctx.fillRect(Math.random()*canvas.width, Math.random()*canvas.height, 15, 15);
+        }
     }, 33); // 约 30 FPS 的刷新率
 
     // 从 canvas 捕获视频流，指定每秒帧数
@@ -118,6 +118,10 @@ function startDataCollection() {
         if (totalPackets > 0) trace.lossRate = (packetsLost / totalPackets).toFixed(4);
         
         lastTime = performance.timeOrigin + performance.now();
+
+        // 获取用户选择的当前网络场景
+        const scenario = document.getElementById('scenarioSelect').value;
+        trace.scenario = scenario;
 
         // 将数据发给 Node.js 保存
         socket.emit('trace_data', trace);

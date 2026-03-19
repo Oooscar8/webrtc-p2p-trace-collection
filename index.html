@@ -5,7 +5,17 @@
     <title>WebRTC 轨迹采集终端</title>
 </head>
 <body>
-    <button id="startBtn">开启模拟视频流</button>
+    <label for="scenarioSelect">当前模拟的网络场景: </label>
+    <select id="scenarioSelect" style="padding: 5px;">
+        <option value="baseline">Baseline (无限制)</option>
+        <option value="low_bw">LowBandwidth (低带宽)</option>
+        <option value="high_loss">HighLoss (高丢包)</option>
+        <option value="high_delay">HighDelay (高延迟)</option>
+        <option value="fluctuating">Fluctuating (波动网络)</option>
+    </select>
+    <br><br>
+    
+    <button id="startBtn">开启高熵模拟视频流</button>
     <button id="callBtn" disabled>建立连接并开始采集</button>
     <br><br>
     <video id="localVideo" autoplay muted playsinline style="width: 300px; border: 1px solid black;"></video>

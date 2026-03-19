@@ -1,2 +1,2 @@
 node_modules/
-webrtc_network_traces.csv
+*.csv
