@@ -3,6 +3,9 @@
 const socket = io('https://actinometrical-snaringly-zola.ngrok-free.dev', { transports: ['websocket'] });
 let localStream, peerConnection;
 
+// 独立会话 ID，用于区分同一场景下的多次采集 (通过房间会话级别统一下发，此处不再随机生成)
+let sessionId = 'default';
+
 // 用于计算速率的全局变量
 let lastBytesReceived = 0, lastBytesSent = 0, lastTime = 0;
 let collectorInterval;
@@ -37,6 +40,12 @@ document.getElementById('callBtn').onclick = async () => {
 };
 
 // 信令处理逻辑 (简化版)
+// 追加一个专用的事件，用来同步全局/双端的 Session ID
+socket.on('set_session_id', (id) => {
+    sessionId = id;
+    console.log(`[同步] 当前录制会话 ID 已统一为: ${sessionId}`);
+});
+
 socket.on('message', async (data) => {
     if (data.type === 'offer') {
         setupRTC();
@@ -122,6 +131,7 @@ function startDataCollection() {
         // 获取用户选择的当前网络场景
         const scenario = document.getElementById('scenarioSelect').value;
         trace.scenario = scenario;
+        trace.sessionId = sessionId.toString();
 
         // 将数据发给 Node.js 保存
         socket.emit('trace_data', trace);
