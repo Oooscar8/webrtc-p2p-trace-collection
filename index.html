@@ -8,11 +8,14 @@
     <label for="scenarioSelect">当前模拟的网络场景: </label>
     <select id="scenarioSelect" style="padding: 5px;">
         <option value="baseline">Baseline (无限制)</option>
-        <option value="3g">3G (移动网络)</option>
-        <option value="low_bw">LowBandwidth (低带宽)</option>
-        <option value="high_loss">HighLoss (高丢包)</option>
-        <option value="high_delay">HighDelay (高延迟)</option>
-        <option value="fluctuating">Fluctuating (波动网络)</option>
+        <option value="fluctuating">Fluctuating (包含时序波动的终极训练集)</option>
+        <option value="very_bad">Very Bad Network (极弱复合网-低带宽/大延迟/高丢包)</option>
+        <option value="lte">LTE (常见移动网-高带宽/高抖动)</option>
+        <option value="dsl">DSL (上下行严重不对称)</option>
+        <option value="3g">3G (老旧移动网)</option>
+        <option value="low_bw">LowBandwidth (纯低带宽测试)</option>
+        <option value="high_loss">HighLoss (纯高丢包测试)</option>
+        <option value="high_delay">HighDelay (纯高延迟测试)</option>
     </select>
     <br><br>
     
