@@ -3,12 +3,18 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 const fs = require('fs');
+const path = require('path');
 
 app.use(express.static(__dirname));
 
 // 初始化一个 Set 记录已创建的 CSV 文件
 const activeCsvFiles = new Set();
 const header = 'timestamp,clientId,rtt_ms,jitter,loss_rate,recv_bps,send_bps,estimated_bw_bps\n';
+const outputDir = path.join(__dirname, 'real_video_csv');
+
+if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+}
 
 io.on('connection', (socket) => {
     console.log('节点已连接:', socket.id);
@@ -29,7 +35,7 @@ io.on('connection', (socket) => {
     socket.on('trace_data', (data) => {
         const scenario = data.scenario || 'baseline';
         const sessionSuffix = data.sessionId || 'default';
-        const csvFile = `webrtc_network_traces_${scenario}_${sessionSuffix}.csv`;
+        const csvFile = path.join(outputDir, `webrtc_network_traces_${scenario}_${sessionSuffix}.csv`);
 
         // 如果文件之前在这个运行会话中没被记录过，检查并创建表头
         if (!activeCsvFiles.has(csvFile)) {
