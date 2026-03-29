@@ -19,7 +19,10 @@
     </select>
     <br><br>
     
-    <button id="startBtn">开启高熵模拟视频流</button>
+    <label for="videoFile">选择本地视频文件: </label>
+    <input type="file" id="videoFile" accept="video/*" />
+    <br><br>
+    <button id="startBtn">加载本地视频并生成发送流</button>
     <button id="callBtn" disabled>建立连接并开始采集</button>
     <br><br>
     <video id="localVideo" autoplay muted playsinline style="width: 300px; border: 1px solid black;"></video>

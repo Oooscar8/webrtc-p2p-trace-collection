@@ -11,24 +11,40 @@ let lastBytesReceived = 0, lastBytesSent = 0, lastTime = 0;
 let collectorInterval;
 
 document.getElementById('startBtn').onclick = async () => {
-    // 使用 HTML5 Canvas 伪造一个视频流代替真实摄像头
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = 480;
-    const ctx = canvas.getContext('2d');
-    
-    // 定时绘制高复杂度、高熵的随机噪点画面，确保 H.264/VP8 编码器输出足够的码率，从而触发带宽探测和拥塞控制
-    setInterval(() => {
-        for (let i = 0; i < 800; i++) {
-            ctx.fillStyle = `rgb(${Math.random()*255}, ${Math.random()*255}, ${Math.random()*255})`;
-            ctx.fillRect(Math.random()*canvas.width, Math.random()*canvas.height, 15, 15);
-        }
-    }, 33); // 约 30 FPS 的刷新率
+    const fileInput = document.getElementById('videoFile');
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+        alert('请先选择一个本地视频文件');
+        return;
+    }
 
-    // 从 canvas 捕获视频流，指定每秒帧数
-    localStream = canvas.captureStream(30);
+    const localVideo = document.getElementById('localVideo');
 
-    document.getElementById('localVideo').srcObject = localStream;
+    // 使用本地视频文件生成 MediaStream
+    const url = URL.createObjectURL(file);
+    localVideo.src = url;
+    localVideo.muted = true;
+
+    try {
+        await localVideo.play();
+    } catch (err) {
+        console.error('本地视频播放失败:', err);
+        alert('本地视频播放失败，请更换文件或检查浏览器权限设置');
+        URL.revokeObjectURL(url);
+        return;
+    }
+
+    // 从视频元素捕获流（较新的浏览器支持）
+    if (typeof localVideo.captureStream === 'function') {
+        localStream = localVideo.captureStream();
+    } else if (typeof localVideo.mozCaptureStream === 'function') {
+        localStream = localVideo.mozCaptureStream();
+    } else {
+        alert('当前浏览器不支持从视频元素捕获流，请使用新版 Chrome/Edge/Firefox');
+        URL.revokeObjectURL(url);
+        return;
+    }
+
     document.getElementById('callBtn').disabled = false;
 };
 
