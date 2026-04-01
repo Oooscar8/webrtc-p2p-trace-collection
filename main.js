@@ -1,6 +1,7 @@
 // const socket = io();
 // 将 socket 连接指向 ngrok 暴露出来的 HTTPS 地址，避免混合内容导致浏览器阻止
-const socket = io('https://actinometrical-snaringly-zola.ngrok-free.dev', { transports: ['websocket'] });
+// const socket = io('https://actinometrical-snaringly-zola.ngrok-free.dev', { transports: ['websocket'] });
+const socket = io({ transports: ['websocket'] });
 let localStream, peerConnection;
 
 // 独立会话 ID，用于区分同一场景下的多次采集 (通过房间会话级别统一下发，此处不再随机生成)
@@ -9,6 +10,57 @@ let sessionId = 'default';
 // 用于计算速率的全局变量
 let lastBytesReceived = 0, lastBytesSent = 0, lastTime = 0;
 let collectorInterval;
+
+const scenarioSelect = document.getElementById('scenarioSelect');
+const modeRadios = document.querySelectorAll('input[name="collectMode"]');
+
+let collectMode = 'manual';
+let activeScenario = scenarioSelect.value;
+let activeTraceStartTs = null;
+let lastAutoNetworkUpdate = null;
+
+function resetRateCounters() {
+    lastBytesReceived = 0;
+    lastBytesSent = 0;
+    lastTime = 0;
+}
+
+function beginNewTraceSegment({ scenario, traceStartTs }) {
+    activeScenario = scenario || scenarioSelect.value || 'baseline';
+    activeTraceStartTs = traceStartTs || Date.now();
+    resetRateCounters();
+}
+
+function setCollectMode(mode) {
+    collectMode = mode === 'auto' ? 'auto' : 'manual';
+    scenarioSelect.disabled = collectMode === 'auto';
+    if (collectMode === 'auto' && lastAutoNetworkUpdate) {
+        if (lastAutoNetworkUpdate.scenario) scenarioSelect.value = lastAutoNetworkUpdate.scenario;
+        beginNewTraceSegment({ scenario: scenarioSelect.value, traceStartTs: lastAutoNetworkUpdate.traceStartTs });
+    }
+}
+
+modeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        if (!radio.checked) return;
+        setCollectMode(radio.value);
+        if (collectMode === 'manual') beginNewTraceSegment({ scenario: scenarioSelect.value, traceStartTs: Date.now() });
+    });
+});
+
+scenarioSelect.addEventListener('change', () => {
+    activeScenario = scenarioSelect.value;
+    if (collectMode === 'manual') beginNewTraceSegment({ scenario: activeScenario, traceStartTs: Date.now() });
+});
+
+socket.on('auto_network_update', (payload) => {
+    lastAutoNetworkUpdate = payload || null;
+    if (collectMode !== 'auto') return;
+    const scenario = payload && payload.scenario;
+    const traceStartTs = payload && payload.traceStartTs;
+    if (scenario) scenarioSelect.value = scenario;
+    beginNewTraceSegment({ scenario: scenarioSelect.value, traceStartTs });
+});
 
 document.getElementById('startBtn').onclick = async () => {
     const fileInput = document.getElementById('videoFile');
@@ -52,7 +104,7 @@ document.getElementById('callBtn').onclick = async () => {
     setupRTC();
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
-    socket.emit('message', { type: 'offer', offer: offer });
+    socket.emit('message', { type: 'offer', offer: offer, autoStart: collectMode === 'auto' });
 };
 
 // 信令处理逻辑 (简化版)
@@ -101,6 +153,7 @@ function setupRTC() {
 // 核心：定时采集网络状态并发送给服务器
 function startDataCollection() {
     // 设置收集步长，例如 500ms (这对 RL state 来说是一个合理的决策间隔)
+    if (!activeTraceStartTs) beginNewTraceSegment({ scenario: scenarioSelect.value, traceStartTs: Date.now() });
     collectorInterval = setInterval(async () => {
         if (!peerConnection || peerConnection.connectionState !== 'connected') return;
 
@@ -144,9 +197,8 @@ function startDataCollection() {
         
         lastTime = performance.timeOrigin + performance.now();
 
-        // 获取用户选择的当前网络场景
-        const scenario = document.getElementById('scenarioSelect').value;
-        trace.scenario = scenario;
+        trace.scenario = activeScenario;
+        trace.traceStartTs = activeTraceStartTs;
         trace.sessionId = sessionId.toString();
 
         // 将数据发给 Node.js 保存

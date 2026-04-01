@@ -5,6 +5,10 @@
     <title>WebRTC 轨迹采集终端</title>
 </head>
 <body>
+    <label>采集模式: </label>
+    <label style="margin-right: 10px;"><input type="radio" name="collectMode" value="manual" checked /> 手动</label>
+    <label><input type="radio" name="collectMode" value="auto" /> 自动</label>
+    <br><br>
     <label for="scenarioSelect">当前模拟的网络场景: </label>
     <select id="scenarioSelect" style="padding: 5px;">
         <option value="baseline">Baseline (无限制)</option>
