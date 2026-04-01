@@ -38,16 +38,45 @@ let lastAutoNetworkUpdate = null;
 const autoScriptPath = process.env.AUTO_SCRIPT_PATH || path.join(__dirname, 'auto_collect_mac.sh');
 let autoScriptProcess = null;
 
+function forwardLines(stream, prefix, logFn) {
+    if (!stream) return;
+    stream.setEncoding('utf8');
+    let buffer = '';
+    stream.on('data', (chunk) => {
+        buffer += chunk;
+        const parts = buffer.split('\n');
+        buffer = parts.pop() || '';
+        for (const line of parts) {
+            const t = line.trimEnd();
+            if (t.length) logFn(`${prefix}${t}`);
+        }
+    });
+    stream.on('end', () => {
+        const t = buffer.trimEnd();
+        if (t.length) logFn(`${prefix}${t}`);
+        buffer = '';
+    });
+}
+
 function startAutoScript() {
     if (autoScriptProcess && !autoScriptProcess.killed) {
         return { ok: true, status: 'running' };
     }
+    if (!fs.existsSync(autoScriptPath)) {
+        return { ok: false, error: `script not found: ${autoScriptPath}` };
+    }
     try {
-        autoScriptProcess = spawn(autoScriptPath, [], { stdio: 'ignore' });
+        autoScriptProcess = spawn('/bin/bash', [autoScriptPath], { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (error) {
         autoScriptProcess = null;
         return { ok: false, error: String(error) };
     }
+    forwardLines(autoScriptProcess.stdout, '[auto_collect] ', console.log);
+    forwardLines(autoScriptProcess.stderr, '[auto_collect][err] ', console.error);
+    autoScriptProcess.on('error', (err) => {
+        console.error('自动脚本启动失败:', err);
+        autoScriptProcess = null;
+    });
     autoScriptProcess.on('exit', () => {
         autoScriptProcess = null;
     });
@@ -94,8 +123,13 @@ io.on('connection', (socket) => {
 
     // 2. 接收前端发来的网络轨迹数据，并追加到不同场景的 CSV 文件
     socket.on('trace_data', (data) => {
-        const scenario = safeScenario(data && data.scenario);
-        const traceStartTs = safeTraceStartTs(data && data.traceStartTs);
+        let scenario = safeScenario(data && data.scenario);
+        let traceStartTs = safeTraceStartTs(data && data.traceStartTs);
+        const autoRunning = Boolean(autoScriptProcess && !autoScriptProcess.killed);
+        if (autoRunning && lastAutoNetworkUpdate) {
+            scenario = lastAutoNetworkUpdate.scenario;
+            traceStartTs = lastAutoNetworkUpdate.traceStartTs;
+        }
         const sessionSuffix = String((data && data.sessionId) || 'default').replace(/[^a-z0-9_-]/gi, '_').slice(0, 64);
         const csvFile = traceStartTs
             ? path.join(outputDir, `webrtc_network_traces_${scenario}_${traceStartTs}.csv`)

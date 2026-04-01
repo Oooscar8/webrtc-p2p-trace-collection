@@ -34,7 +34,9 @@ notify_frontend() {
   local traceStartTs="$2"
   local payload
   payload="$(printf '{"scenario":"%s","traceStartTs":%s}' "$scenario" "$traceStartTs")"
-  curl -sS -X POST "${SERVER_URL}/auto/network" -H 'Content-Type: application/json' -d "${payload}" >/dev/null
+  if ! curl -sS --connect-timeout 2 --max-time 5 --retry 2 --retry-all-errors -X POST "${SERVER_URL}/auto/network" -H 'Content-Type: application/json' -d "${payload}" >/dev/null; then
+    echo "⚠️  [warn] notify_frontend failed: scenario=${scenario} traceStartTs=${traceStartTs}" >&2
+  fi
 }
 
 apply_profile() {
@@ -143,16 +145,22 @@ pfctl -e 2>/dev/null || true
 dnctl -q flush
 echo "dummynet out all pipe 1
 dummynet in all pipe 1" | pfctl -f - 2>/dev/null
+dnctl pipe 1 config bw 1000Mbit/s delay 0ms plr 0.00
 
 scenarios=(baseline fluctuating very_bad lte dsl 3g low_bw high_loss high_delay)
 
 while true; do
   for scenario in "${scenarios[@]}"; do
+    start_s="$(date +%s)"
     traceStartTs="$(now_ms)"
     echo "[$(date +%T)] 切换网络环境: ${scenario}  (traceStartTs=${traceStartTs})"
-    apply_profile "${scenario}"
+    dnctl pipe 1 config bw 1000Mbit/s delay 0ms plr 0.00
     notify_frontend "${scenario}" "${traceStartTs}"
-    sleep "${INTERVAL_SECONDS}"
+    apply_profile "${scenario}"
+    elapsed_s="$(( $(date +%s) - start_s ))"
+    remaining_s="$(( INTERVAL_SECONDS - elapsed_s ))"
+    if [ "${remaining_s}" -gt 0 ]; then
+      sleep "${remaining_s}"
+    fi
   done
 done
-

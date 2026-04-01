@@ -1,8 +1,9 @@
 // const socket = io();
 // 将 socket 连接指向 ngrok 暴露出来的 HTTPS 地址，避免混合内容导致浏览器阻止
 // const socket = io('https://actinometrical-snaringly-zola.ngrok-free.dev', { transports: ['websocket'] });
-const socket = io({ transports: ['websocket'] });
+const socket = io({ transports: ['polling', 'websocket'] });
 let localStream, peerConnection;
+let localVideoEndHandlerInstalled = false;
 
 // 独立会话 ID，用于区分同一场景下的多次采集 (通过房间会话级别统一下发，此处不再随机生成)
 let sessionId = 'default';
@@ -76,6 +77,14 @@ document.getElementById('startBtn').onclick = async () => {
     const url = URL.createObjectURL(file);
     localVideo.src = url;
     localVideo.muted = true;
+    localVideo.loop = true;
+    if (!localVideoEndHandlerInstalled) {
+        localVideo.addEventListener('ended', () => {
+            localVideo.currentTime = 0;
+            localVideo.play().catch(() => {});
+        });
+        localVideoEndHandlerInstalled = true;
+    }
 
     try {
         await localVideo.play();
@@ -137,7 +146,9 @@ function setupRTC() {
         ]
     });
     
-    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    if (localStream) {
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    }
     
     peerConnection.ontrack = e => {
         document.getElementById('remoteVideo').srcObject = e.streams[0];
