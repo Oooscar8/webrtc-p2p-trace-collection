@@ -90,7 +90,7 @@ timestamp,clientId,rtt_ms,jitter,loss_rate,recv_bps,send_bps,estimated_bw_bps
 仓库内提供脚本 `tools/build_rl_dataset.py`，会对每个 CSV 做：按 `clientId` 拆分 → 按 `timestamp` 排序 → 滑动窗口聚合 → 生成离线 RL 四元组 `(s, a, r, s')`。
 
 默认四元组定义：
-- 状态 `s_t`：对最近 `window_size` 行做聚合（默认 mean），得到 `[send_bps, recv_bps, rtt_ms, loss_rate, jitter_ms]`（可用 `--state-cols` 覆盖）
+- 状态 `s_t`：对最近 `window_size` 行做聚合（默认 mean），得到 `[send_bps, recv_bps, rtt_ms, loss_rate, jitter_ms]`（可用 `--state-cols` 覆盖；其中 `jitter_ms` 对应 CSV 列 `jitter`）
 - 动作 `a_t`：第 `t` 行的 `estimated_bw_bps`
 - 奖励 `r_t`：QoE 形式（可调权重）：`log(1+recv_bps/1e6) - rtt_ms/1000 - loss_rate - 0.1*|a_t-a_{t-1}|/1e6`（默认用 `t+1` 行指标计算，近似动作生效后的反馈）
 - 下一状态 `s_{t+1}`：窗口向后滑动 1 行
@@ -98,12 +98,36 @@ timestamp,clientId,rtt_ms,jitter,loss_rate,recv_bps,send_bps,estimated_bw_bps
 生成（输出到 `rl_dataset/`）：
 ```bash
 python3 tools/build_rl_dataset.py --input real_video_csv --output rl_dataset --window-size 10
-```s
+```
 
 输出文件：
 - `rl_dataset/transitions.npz`：`observations/actions/rewards/next_observations/terminals`
 - `rl_dataset/transitions.csv`：同内容 + `csv/scenario/trace_id/client_id/timestamp` 元信息
 - `rl_dataset/manifest.csv`：每个 (csv, client_id) 的行数与样本数统计
+
+## 离线训练（IQL baseline）
+
+> 说明：当前数据集来自 GCC 行为策略的离线轨迹。IQL 更偏向“数据内”的策略提升，适合作为第一版离线 RL baseline。
+
+1) 安装 Python 依赖：
+```bash
+python3 -m pip install -r rl/requirements.txt
+```
+
+2) 训练（会输出 `models/iql/actor.pt` 与 `models/iql/norm.json`）：
+```bash
+python3 rl/train_iql.py --dataset rl_dataset/transitions.npz --outdir models/iql
+```
+
+## 推理服务（HTTP / WebSocket）
+
+启动推理服务：
+```bash
+python3 rl/serve_policy.py --model models/iql/actor.pt --norm models/iql/norm.json --port 8000
+```
+
+- HTTP: `POST http://<host>:8000/predict`
+- WS: `ws://<host>:8000/ws`
 
 ## 自动网络脚本与权限
 
