@@ -83,6 +83,28 @@ http://<服务器IP>:3000
 timestamp,clientId,rtt_ms,jitter,loss_rate,recv_bps,send_bps,estimated_bw_bps
 ```
 
+## 离线 RL 数据集生成（四元组）
+
+采集到的 CSV 往往包含**两端 peer 的数据交织在同一个文件里**（用 `clientId` 区分）。
+
+仓库内提供脚本 `tools/build_rl_dataset.py`，会对每个 CSV 做：按 `clientId` 拆分 → 按 `timestamp` 排序 → 滑动窗口聚合 → 生成离线 RL 四元组 `(s, a, r, s')`。
+
+默认四元组定义：
+- 状态 `s_t`：对最近 `window_size` 行做聚合（默认 mean），得到 `[send_bps, recv_bps, rtt_ms, loss_rate, jitter_ms]`（可用 `--state-cols` 覆盖）
+- 动作 `a_t`：第 `t` 行的 `estimated_bw_bps`
+- 奖励 `r_t`：QoE 形式（可调权重）：`log(1+recv_bps/1e6) - rtt_ms/1000 - loss_rate - 0.1*|a_t-a_{t-1}|/1e6`（默认用 `t+1` 行指标计算，近似动作生效后的反馈）
+- 下一状态 `s_{t+1}`：窗口向后滑动 1 行
+
+生成（输出到 `rl_dataset/`）：
+```bash
+python3 tools/build_rl_dataset.py --input real_video_csv --output rl_dataset --window-size 10
+```s
+
+输出文件：
+- `rl_dataset/transitions.npz`：`observations/actions/rewards/next_observations/terminals`
+- `rl_dataset/transitions.csv`：同内容 + `csv/scenario/trace_id/client_id/timestamp` 元信息
+- `rl_dataset/manifest.csv`：每个 (csv, client_id) 的行数与样本数统计
+
 ## 自动网络脚本与权限
 
 自动脚本需要 root 权限执行 `dnctl/pfctl`。推荐使用以下方式之一：
