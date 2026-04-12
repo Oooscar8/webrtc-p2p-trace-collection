@@ -12,7 +12,7 @@ app.use(express.static(__dirname));
 // 初始化一个 Set 记录已创建的 CSV 文件
 const activeCsvFiles = new Set();
 const header = 'timestamp,clientId,rtt_ms,jitter,loss_rate,recv_bps,send_bps,estimated_bw_bps\n';
-const outputDir = path.join(__dirname, 'real_video_csv');
+const outputDir = path.join(__dirname, '..', 'real_video_csv');
 
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
@@ -35,7 +35,7 @@ function safeTraceStartTs(raw) {
 }
 
 let lastAutoNetworkUpdate = null;
-const autoScriptPath = process.env.AUTO_SCRIPT_PATH || path.join(__dirname, 'auto_collect_mac.sh');
+const autoScriptPath = process.env.AUTO_SCRIPT_PATH || path.join(__dirname, '..', 'auto_collect_mac.sh');
 let autoScriptProcess = null;
 
 function forwardLines(stream, prefix, logFn) {

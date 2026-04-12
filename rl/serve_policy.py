@@ -24,6 +24,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
@@ -60,7 +61,7 @@ def action_from_norm(a_norm: float, norm: Norm) -> float:
 class Actor(nn.Module):
     def __init__(self, obs_dim: int, hidden: int = 256):
         super().__init__()
-        self.net = nn.Sequential(
+        self.backbone = nn.Sequential(
             nn.Linear(obs_dim, hidden),
             nn.ReLU(),
             nn.Linear(hidden, hidden),
@@ -69,7 +70,7 @@ class Actor(nn.Module):
         )
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return torch.tanh(self.net(obs))
+        return torch.tanh(self.backbone(obs))
 
 
 class StateIn(BaseModel):
@@ -114,6 +115,15 @@ def build_app(model_path: Path, norm_path: Path) -> FastAPI:
     actor.eval()
 
     app = FastAPI()
+
+    # Add CORS middleware to allow cross-origin requests
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # smoothing state in server memory (per-process). For multi-client you should
     # move this state to the client side or key by client id.

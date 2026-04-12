@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC A/B Test 验证终端（RL vs GCC）</title>
+</head>
+<body>
+    <div style="margin-bottom: 12px;">
+        <b>模式：</b>模型部署验证 / A/B Test（与数据集采集功能独立运行）
+    </div>
+
+    <label>采集模式: </label>
+    <label style="margin-right: 10px;"><input type="radio" name="collectMode" value="manual" checked /> 手动</label>
+    <label><input type="radio" name="collectMode" value="auto" /> 自动</label>
+    <br><br>
+
+    <label for="scenarioSelect">当前模拟的网络场景: </label>
+    <select id="scenarioSelect" style="padding: 5px;">
+        <option value="baseline">Baseline (无限制)</option>
+        <option value="fluctuating">Fluctuating (包含时序波动的终极训练集)</option>
+        <option value="very_bad">Very Bad Network (极弱复合网-低带宽/大延迟/高丢包)</option>
+        <option value="lte">LTE (常见移动网-高带宽/高抖动)</option>
+        <option value="dsl">DSL (上下行严重不对称)</option>
+        <option value="3g">3G (老旧移动网)</option>
+        <option value="low_bw">LowBandwidth (纯低带宽测试)</option>
+        <option value="high_loss">HighLoss (纯高丢包测试)</option>
+        <option value="high_delay">HighDelay (纯高延迟测试)</option>
+    </select>
+    <br><br>
+
+    <label for="videoFile">选择本地视频文件: </label>
+    <input type="file" id="videoFile" accept="video/*" />
+    <br><br>
+
+    <div style="padding: 10px; border: 1px dashed #aaa; width: 720px;">
+        <div>
+            <label>AB 分组：</label>
+            <select id="abMode" style="padding: 4px;">
+                <option value="random" selected>随机 (50/50)</option>
+                <option value="gcc">对照组：GCC</option>
+                <option value="rl">实验组：RL + 限速</option>
+            </select>
+            <span style="margin-left: 12px;">本次会话分组：<span id="abGroupDisplay">-</span></span>
+        </div>
+
+        <div style="margin-top: 8px;">
+            <label style="margin-right: 12px;"><input type="checkbox" id="enablePolicy" disabled /> RL 限速（实验组自动开启）</label>
+            <label>推理服务：</label>
+            <input type="text" id="policyServerUrl" style="width: 420px; padding: 4px;" />
+        </div>
+
+        <div style="margin-top: 8px;">已应用 maxBitrate：<span id="appliedMaxBitrate">-</span> kbps</div>
+    </div>
+
+    <br><br>
+    <button id="startBtn">加载本地视频并生成发送流</button>
+    <button id="callBtn" disabled>建立连接并开始采集</button>
+    <br><br>
+
+    <video id="localVideo" autoplay muted playsinline style="width: 300px; border: 1px solid black;" loop></video>
+    <video id="remoteVideo" autoplay playsinline style="width: 300px; border: 1px solid black;"></video>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="ab_test.js"></script>
+</body>
+</html>

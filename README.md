@@ -20,15 +20,26 @@
 
 ```
 .
-├── index.html              # 前端页面
-├── main.js                 # WebRTC 逻辑 + stats 采集 + 自动模式联动
-├── server.js               # 信令与 CSV 写入服务
+├── trace_collection/       # 数据集采集（GCC 轨迹）
+│   ├── index.html
+│   ├── main.js
+│   └── server.js
+├── ab_test/                # A/B Test（RL vs GCC）
+│   ├── ab_test.html
+│   ├── ab_test.js
+│   └── server_abtest.js
+├── rl/                     # RL 训练与推理服务
+├── tools/                  # 工具脚本（数据集生成、QoE 报告）
+├── models/                 # 模型文件
+├── real_video_csv/         # 数据集采集 CSV 输出
+├── ab_test_csv/            # A/B Test CSV 输出
 ├── auto_collect_mac.sh     # 自动切换网络环境与触发场景广播（Mac）
-├── auto_fluctuate_mac.sh   # 波动网络脚本（可选）
-└── real_video_csv/         # 采集到的 CSV 输出目录（运行时自动创建）
+└── auto_fluctuate_mac.sh   # 波动网络脚本（可选）
 ```
 
 ## 运行方式
+
+### 数据集采集（GCC 轨迹）
 
 1) 安装依赖（若已有可跳过）：
 ```bash
@@ -37,13 +48,17 @@ npm install
 
 2) 启动服务：
 ```bash
-node server.js
+npm run start:collect
 ```
 
 3) 打开浏览器（两端设备均打开）：
 ```
 http://<服务器IP>:3000
 ```
+
+### A/B Test（RL vs GCC）
+
+参考下方 "平台两种功能" 章节
 
 4) 在每端浏览器执行以下步骤：
    - 选择模式（手动/自动）
@@ -76,12 +91,28 @@ http://<服务器IP>:3000
 
 ## CSV 数据输出
 
+### 数据集采集（GCC 轨迹）
+
 - 输出目录：`real_video_csv/`
 - 文件命名：`webrtc_network_traces_<scenario>_<traceStartTs>.csv`
 - 表头字段：
 ```
 timestamp,clientId,rtt_ms,jitter,loss_rate,recv_bps,send_bps,estimated_bw_bps
 ```
+
+### A/B Test（RL vs GCC）
+
+- 输出目录：`ab_test_csv/`
+- 文件命名：`webrtc_abtest_traces_<scenario>_<traceStartTs>.csv`
+- 表头字段：
+```
+timestamp,clientId,ab_group,rtt_ms,jitter,loss_rate,recv_bps,send_bps,gcc_estimated_bw_bps,policy_max_bitrate_bps,estimated_bw_bps
+```
+字段说明：
+- `ab_group`：`gcc`(对照组) / `rl`(实验组)
+- `gcc_estimated_bw_bps`：浏览器 `getStats()` 中的 `availableOutgoingBitrate`
+- `policy_max_bitrate_bps`：实验组实际下发给 sender 的 `maxBitrate`（对照组为 0）
+- `estimated_bw_bps`：用于对比/训练的“动作”字段；对照组=GCC 预估，实验组=RL 限速值
 
 ## 离线 RL 数据集生成（四元组）
 
@@ -129,23 +160,82 @@ python3 rl/serve_policy.py --model models/iql/actor.pt --norm models/iql/norm.js
 - HTTP: `POST http://<host>:8000/predict`
 - WS: `ws://<host>:8000/ws`
 
+## 平台两种功能（完全隔离）
+
+本仓库同时支持两条完全隔离的链路：
+- **数据集采集（GCC 轨迹）**：用于离线 RL 数据集构建与训练，输出到 `real_video_csv/`，字段与历史数据保持一致。
+- **A/B Test（RL vs GCC）**：用于部署模型在线验证与 QoE 对比，输出到 `ab_test_csv/`，字段包含 AB 分组与限速信息。
+
+> 建议：两条链路用不同端口启动不同 Node 服务，避免误写同目录/误读同 CSV。
+
+### 数据集采集（GCC 轨迹）
+启动采集服务（端口 3000）：
+```bash
+npm install
+npm run start:collect
+```
+浏览器打开：`http://<服务器IP>:3000`（页面：`index.html`）
+
+### A/B Test（RL vs GCC）
+1) 启动推理服务（端口 8000）：
+
+先确认本地存在模型文件（训练后会生成）：
+- `models/iql/actor.pt`
+- `models/iql/norm.json`
+
+```bash
+python3 -m pip install -r rl/requirements.txt
+python3 rl/serve_policy.py --model models/iql/actor.pt --norm models/iql/norm.json --port 8000
+```
+
+> 如果你当前 `serve_policy.py` 版本已提供默认值，也可以只传 `--port 8000`；若出现“--model/--norm required”，请按上面显式传参。
+
+2) 启动 A/B Test 服务（端口 3001）：
+```bash
+npm install
+npm run start:ab
+```
+
+3) 浏览器打开：`http://<服务器IP>:3001/ab_test.html`，在“AB 分组”里选择 `对照组：GCC` / `实验组：RL + 限速` / `随机(50/50)`。
+
+说明：A/B Test 前端对推理请求做了限频（默认 1s 1 次），并将返回的 `action_bps` 写入 `maxBitrate`；同时会在 CSV 中记录 `gcc_estimated_bw_bps` 与 `policy_max_bitrate_bps`，用于 QoE 对比。
+
+## A/B 对比与 QoE 指标（离线统计）
+
+为了对比 RL 拥塞控制 vs GCC，建议至少输出以下 QoE 指标组（`tools/qoe_report.py` 已覆盖）：吞吐（`recv_bps_mean`）、时延（`rtt_ms_p95`）、丢包（`loss_rate_mean`）、抖动（`jitter_ms_p95`）、平滑性（`cap_delta_bps_mean`）、综合 QoE（`qoe_score_mean`）。
+
+生成 A/B QoE 报告：
+```bash
+python3 tools/qoe_report.py --input ab_test_csv --outdir output
+```
+
+输出：
+- `output/qoe_segments.csv`：每条 trace 按 client 统计的 QoE 指标
+- `output/qoe_ab_summary.csv`：按 (scenario, ab_group) 聚合后的 A/B 对比表
+
 ## 自动网络脚本与权限
 
 自动脚本需要 root 权限执行 `dnctl/pfctl`。推荐使用以下方式之一：
-- 使用 `sudo node server.js` 启动服务端
+- 使用 `sudo npm run start:collect` 或 `sudo npm run start:ab` 启动服务端
 - 或在系统中为 `dnctl/pfctl` 配置免密 sudo
 
 可配置的环境变量：
 - `AUTO_SCRIPT_PATH`：自动脚本路径（默认 `./auto_collect_mac.sh`）
-- `SERVER_URL`：脚本通知服务端的地址（默认 `http://localhost:3000`）
+- `SERVER_URL`：脚本通知服务端的地址（数据集采集默认 `http://localhost:3000`，A/B Test 默认 `http://localhost:3001`）
 - `INTERVAL_SECONDS`：切换间隔秒数（默认 `300`）
 
 ## 关键代码位置
 
-- 本地视频生成流：`main.js` 中 `startBtn` 点击逻辑
-- 发送流接入：`main.js` 中 `setupRTC()` 的 `addTrack`
-- 统计采集：`main.js` 中 `startDataCollection()`
-- CSV 写入：`server.js` 中 `trace_data` 事件处理
+### 数据集采集（GCC 轨迹）
+- 本地视频生成流：`trace_collection/main.js` 中 `startBtn` 点击逻辑
+- 发送流接入：`trace_collection/main.js` 中 `setupRTC()` 的 `addTrack`
+- 统计采集：`trace_collection/main.js` 中 `startDataCollection()`
+- CSV 写入：`trace_collection/server.js` 中 `trace_data` 事件处理
+
+### A/B Test（RL vs GCC）
+- AB 分组逻辑：`ab_test/ab_test.js`
+- RL 策略请求：`ab_test/ab_test.js`
+- CSV 写入：`ab_test/server_abtest.js` 中 `trace_data` 事件处理
 
 ---
 

@@ -2,8 +2,10 @@
   "name": "webrtc-rl-collector",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "trace_collection/index.js",
   "scripts": {
+    "start:collect": "node trace_collection/server.js",
+    "start:ab": "node ab_test/server_abtest.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
