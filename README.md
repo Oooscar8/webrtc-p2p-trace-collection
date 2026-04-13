@@ -172,7 +172,7 @@ python3 rl/serve_policy.py --model models/iql/actor.pt --norm models/iql/norm.js
 启动采集服务（端口 3000）：
 ```bash
 npm install
-npm run start:collect
+sudo npm run start:collect
 ```
 浏览器打开：`http://<服务器IP>:3000`（页面：`index.html`）
 
@@ -193,7 +193,7 @@ python3 rl/serve_policy.py --model models/iql/actor.pt --norm models/iql/norm.js
 2) 启动 A/B Test 服务（端口 3001）：
 ```bash
 npm install
-npm run start:ab
+sudo npm run start:ab
 ```
 
 3) 浏览器打开：`http://<服务器IP>:3001/ab_test.html`，在“AB 分组”里选择 `对照组：GCC` / `实验组：RL + 限速` / `随机(50/50)`。
