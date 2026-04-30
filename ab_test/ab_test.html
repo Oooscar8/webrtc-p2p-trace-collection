@@ -32,6 +32,16 @@
     <input type="file" id="videoFile" accept="video/*" />
     <br><br>
 
+    <div style="padding: 10px; border: 1px dashed #aaa; width: 720px; margin-bottom: 16px;">
+        <div>
+            <label>房间 ID：</label>
+            <input type="text" id="roomIdInput" value="default-room" style="width: 220px; padding: 4px;" />
+            <button id="joinRoomBtn" type="button">加入房间</button>
+            <span style="margin-left: 12px;">房间状态：<span id="roomStatus">未加入</span></span>
+        </div>
+        <div style="margin-top: 8px; color: #555;">每个房间最多允许 2 台设备接入，信令和 A/B 状态只在房间内同步。</div>
+    </div>
+
     <div style="padding: 10px; border: 1px dashed #aaa; width: 720px;">
         <div>
             <label>AB 分组：</label>

@@ -41,11 +41,61 @@ function safeAbGroup(raw) {
     return 'gcc';
 }
 
-let lastAutoNetworkUpdate = null;
-let lastAbGroup = null;
-let lastAbMode = null;
+function safeRoomId(raw) {
+    const v = String(raw || 'default-room')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-')
+        .slice(0, 64);
+    return v || 'default-room';
+}
+
+const roomStates = new Map();
 const autoScriptPath = process.env.AUTO_SCRIPT_PATH || path.join(__dirname, '..', 'auto_collect_mac.sh');
 let autoScriptProcess = null;
+
+function getOrCreateRoomState(roomId) {
+    const normalizedRoomId = safeRoomId(roomId);
+    let state = roomStates.get(normalizedRoomId);
+    if (!state) {
+        state = {
+            sockets: new Set(),
+            lastAutoNetworkUpdate: null,
+            lastAbGroup: null,
+            lastAbMode: null,
+            currentSessionId: null,
+        };
+        roomStates.set(normalizedRoomId, state);
+    }
+    return state;
+}
+
+function emitRoomState(roomId) {
+    const normalizedRoomId = safeRoomId(roomId);
+    const state = roomStates.get(normalizedRoomId);
+    if (!state) return;
+    io.to(normalizedRoomId).emit('room_state', {
+        roomId: normalizedRoomId,
+        peerCount: state.sockets.size,
+        isFull: state.sockets.size >= 2,
+    });
+}
+
+function leaveCurrentRoom(socket) {
+    const roomId = socket.data && socket.data.roomId ? safeRoomId(socket.data.roomId) : null;
+    if (!roomId) return;
+    const state = roomStates.get(roomId);
+    if (state) {
+        state.sockets.delete(socket.id);
+        if (state.sockets.size === 0) {
+            roomStates.delete(roomId);
+        } else {
+            emitRoomState(roomId);
+        }
+    }
+    socket.leave(roomId);
+    socket.data.roomId = null;
+}
 
 function forwardLines(stream, prefix, logFn) {
     if (!stream) return;
@@ -108,45 +158,83 @@ app.post('/auto/network', (req, res) => {
         res.status(400).json({ ok: false, error: 'invalid traceStartTs' });
         return;
     }
-    lastAutoNetworkUpdate = { scenario, traceStartTs };
-    io.emit('auto_network_update', lastAutoNetworkUpdate);
-    
-    // 如果原始模式是 random，每次网络切换时重新随机分配 AB 分组
-    if (lastAbMode === 'random') {
-        lastAbGroup = safeAbGroup('random');
-        io.emit('set_ab_group', lastAbGroup);
-        console.log(`[abtest] 网络切换至 ${scenario}，重新随机分组为: ${lastAbGroup}`);
+
+    for (const [roomId, state] of roomStates.entries()) {
+        state.lastAutoNetworkUpdate = { scenario, traceStartTs };
+        io.to(roomId).emit('auto_network_update', state.lastAutoNetworkUpdate);
+
+        // 如果原始模式是 random，每次网络切换时重新随机分配 AB 分组
+        if (state.lastAbMode === 'random') {
+            state.lastAbGroup = safeAbGroup('random');
+            io.to(roomId).emit('set_ab_group', state.lastAbGroup);
+            console.log(`[abtest] 房间 ${roomId} 网络切换至 ${scenario}，重新随机分组为: ${state.lastAbGroup}`);
+        }
     }
-    
-    res.json({ ok: true, scenario, traceStartTs });
+
+    res.json({ ok: true, scenario, traceStartTs, roomCount: roomStates.size });
 });
 
 io.on('connection', (socket) => {
     console.log('[abtest] 节点已连接:', socket.id);
-    if (lastAutoNetworkUpdate) socket.emit('auto_network_update', lastAutoNetworkUpdate);
-    if (lastAbGroup) socket.emit('set_ab_group', lastAbGroup);
+
+    socket.on('join_room', (payload) => {
+        const roomId = safeRoomId(payload && payload.roomId);
+        const currentRoomId = socket.data && socket.data.roomId ? safeRoomId(socket.data.roomId) : null;
+        if (currentRoomId === roomId) {
+            const state = getOrCreateRoomState(roomId);
+            socket.emit('room_joined', { roomId, peerCount: state.sockets.size });
+            emitRoomState(roomId);
+            return;
+        }
+
+        leaveCurrentRoom(socket);
+
+        const state = getOrCreateRoomState(roomId);
+        if (state.sockets.size >= 2) {
+            socket.emit('room_join_error', { roomId, error: 'room_full' });
+            return;
+        }
+
+        socket.join(roomId);
+        socket.data.roomId = roomId;
+        state.sockets.add(socket.id);
+        socket.emit('room_joined', { roomId, peerCount: state.sockets.size });
+        emitRoomState(roomId);
+
+        if (state.lastAutoNetworkUpdate) socket.emit('auto_network_update', state.lastAutoNetworkUpdate);
+        if (state.lastAbGroup) socket.emit('set_ab_group', state.lastAbGroup);
+        if (state.currentSessionId) socket.emit('set_session_id', state.currentSessionId);
+        console.log(`[abtest] 节点 ${socket.id} 已加入房间 ${roomId} (${state.sockets.size}/2)`);
+    });
 
     // 1) 信令 + 会话级 AB 分组
     socket.on('message', (message) => {
+        const roomId = socket.data && socket.data.roomId ? safeRoomId(socket.data.roomId) : null;
+        if (!roomId) return;
+        const state = getOrCreateRoomState(roomId);
         if (message.type === 'offer') {
             const currentSessionId = Math.floor(Math.random() * 1000000).toString();
-            lastAbMode = String(message && message.abMode || '').toLowerCase();
-            lastAbGroup = safeAbGroup(message && message.abGroup);
-            io.emit('set_session_id', currentSessionId);
-            io.emit('set_ab_group', lastAbGroup);
+            state.lastAbMode = String(message && message.abMode || '').toLowerCase();
+            state.lastAbGroup = safeAbGroup(message && message.abGroup);
+            state.currentSessionId = currentSessionId;
+            io.to(roomId).emit('set_session_id', currentSessionId);
+            io.to(roomId).emit('set_ab_group', state.lastAbGroup);
             if (message.autoStart) startAutoScript();
         }
-        socket.broadcast.emit('message', message);
+        socket.to(roomId).emit('message', message);
     });
 
     // 2) AB test trace 数据写入
     socket.on('ab_trace_data', (data) => {
+        const roomId = socket.data && socket.data.roomId ? safeRoomId(socket.data.roomId) : null;
+        if (!roomId) return;
+        const roomState = getOrCreateRoomState(roomId);
         let scenario = safeScenario(data && data.scenario);
         let traceStartTs = safeTraceStartTs(data && data.traceStartTs);
         const autoRunning = Boolean(autoScriptProcess && !autoScriptProcess.killed);
-        if (autoRunning && lastAutoNetworkUpdate) {
-            scenario = lastAutoNetworkUpdate.scenario;
-            traceStartTs = lastAutoNetworkUpdate.traceStartTs;
+        if (autoRunning && roomState.lastAutoNetworkUpdate) {
+            scenario = roomState.lastAutoNetworkUpdate.scenario;
+            traceStartTs = roomState.lastAutoNetworkUpdate.traceStartTs;
         }
 
         const sessionSuffix = String((data && data.sessionId) || 'default').replace(/[^a-z0-9_-]/gi, '_').slice(0, 64);
@@ -161,7 +249,7 @@ io.on('connection', (socket) => {
             activeCsvFiles.add(csvFile);
         }
 
-        const abGroup = safeAbGroup((data && data.abGroup) || lastAbGroup);
+        const abGroup = safeAbGroup((data && data.abGroup) || roomState.lastAbGroup);
 
         const ts = Number(data && data.timestamp) || Date.now();
         const rtt = Number(data && data.rtt) || 0;
@@ -177,6 +265,10 @@ io.on('connection', (socket) => {
         fs.appendFile(csvFile, row, (err) => {
             if (err) console.error(`写入 ${csvFile} 失败`, err);
         });
+    });
+
+    socket.on('disconnect', () => {
+        leaveCurrentRoom(socket);
     });
 });
 

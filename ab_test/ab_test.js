@@ -21,6 +21,9 @@ const policyServerUrlEl = document.getElementById('policyServerUrl');
 const appliedMaxBitrateEl = document.getElementById('appliedMaxBitrate');
 const abModeEl = document.getElementById('abMode');
 const abGroupDisplayEl = document.getElementById('abGroupDisplay');
+const roomIdInputEl = document.getElementById('roomIdInput');
+const joinRoomBtnEl = document.getElementById('joinRoomBtn');
+const roomStatusEl = document.getElementById('roomStatus');
 
 const POLICY_REQUEST_MIN_INTERVAL_MS = 1000;
 const POLICY_REQUEST_TIMEOUT_MS = 400;
@@ -35,11 +38,56 @@ let collectMode = 'manual';
 let activeScenario = scenarioSelect.value;
 let activeTraceStartTs = null;
 let lastAutoNetworkUpdate = null;
+let desiredRoomId = 'default-room';
+let currentRoomId = '';
+let roomJoined = false;
+let roomPeerCount = 0;
 
 if (policyServerUrlEl && !policyServerUrlEl.value) {
     const host = window.location.hostname || '127.0.0.1';
     const proto = window.location.protocol || 'http:';
     policyServerUrlEl.value = `${proto}//${host}:8000`;
+}
+
+if (roomIdInputEl) {
+    const queryRoomId = new URLSearchParams(window.location.search).get('room');
+    desiredRoomId = sanitizeRoomId(queryRoomId || roomIdInputEl.value);
+    roomIdInputEl.value = desiredRoomId;
+}
+
+function sanitizeRoomId(raw) {
+    const value = String(raw || 'default-room')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-')
+        .slice(0, 64);
+    return value || 'default-room';
+}
+
+function setRoomStatus(text, isError = false) {
+    if (!roomStatusEl) return;
+    roomStatusEl.textContent = text;
+    roomStatusEl.style.color = isError ? '#b00020' : '#0b6b2a';
+}
+
+function updateRoomStatus() {
+    if (!roomJoined) {
+        setRoomStatus(`未加入（目标房间：${desiredRoomId}）`, true);
+        return;
+    }
+    const suffix = roomPeerCount >= 2 ? '，已满' : '，等待另一台设备';
+    setRoomStatus(`已加入 ${currentRoomId}（${roomPeerCount}/2）${suffix}`);
+}
+
+function joinRoom(roomId) {
+    desiredRoomId = sanitizeRoomId(roomId);
+    if (roomIdInputEl) roomIdInputEl.value = desiredRoomId;
+    if (!socket.connected) {
+        setRoomStatus(`信令未连接，等待加入 ${desiredRoomId}...`, true);
+        return;
+    }
+    setRoomStatus(`正在加入 ${desiredRoomId}...`);
+    socket.emit('join_room', { roomId: desiredRoomId });
 }
 
 function normalizeAbGroup(raw) {
@@ -73,6 +121,46 @@ function getPolicyServerBaseUrl() {
     const raw = String(policyServerUrlEl.value || '').trim();
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 }
+
+socket.on('connect', () => {
+    joinRoom(desiredRoomId);
+});
+
+socket.on('disconnect', () => {
+    roomJoined = false;
+    roomPeerCount = 0;
+    currentRoomId = '';
+    setRoomStatus('已断开，等待重连...', true);
+});
+
+socket.on('room_joined', (payload) => {
+    currentRoomId = sanitizeRoomId(payload && payload.roomId);
+    roomJoined = true;
+    roomPeerCount = Number(payload && payload.peerCount) || 1;
+    updateRoomStatus();
+});
+
+socket.on('room_state', (payload) => {
+    const roomId = sanitizeRoomId(payload && payload.roomId);
+    if (currentRoomId && roomId !== currentRoomId) return;
+    currentRoomId = roomId;
+    roomJoined = true;
+    roomPeerCount = Number(payload && payload.peerCount) || 1;
+    updateRoomStatus();
+});
+
+socket.on('room_join_error', (payload) => {
+    roomJoined = false;
+    roomPeerCount = 0;
+    currentRoomId = '';
+    const error = String(payload && payload.error || 'join_failed');
+    if (error === 'room_full') {
+        setRoomStatus(`加入失败：房间 ${sanitizeRoomId(payload && payload.roomId)} 已满`, true);
+        alert(`房间 ${sanitizeRoomId(payload && payload.roomId)} 已满，每个房间最多 2 台设备`);
+        return;
+    }
+    setRoomStatus(`加入失败：${error}`, true);
+});
 
 function resetRateCounters() {
     lastBytesReceived = 0;
@@ -183,6 +271,12 @@ scenarioSelect.addEventListener('change', () => {
     if (collectMode === 'manual') beginNewTraceSegment({ scenario: activeScenario, traceStartTs: Date.now() });
 });
 
+if (joinRoomBtnEl) {
+    joinRoomBtnEl.addEventListener('click', () => {
+        joinRoom(roomIdInputEl ? roomIdInputEl.value : desiredRoomId);
+    });
+}
+
 socket.on('auto_network_update', (payload) => {
     lastAutoNetworkUpdate = payload || null;
     if (collectMode !== 'auto') return;
@@ -230,7 +324,9 @@ function setupRTC() {
     }
 
     peerConnection.ontrack = e => {
-        document.getElementById('remoteVideo').srcObject = e.streams[0];
+        const remoteVideoEl = document.getElementById('remoteVideo');
+        remoteVideoEl.srcObject = e.streams[0];
+        remoteVideoEl.play().catch(() => {});
         if (!collectorInterval) startDataCollection();
     };
 
@@ -283,6 +379,15 @@ document.getElementById('startBtn').onclick = async () => {
 };
 
 document.getElementById('callBtn').onclick = async () => {
+    if (!roomJoined || !currentRoomId) {
+        alert('请先加入同一个房间后再建立连接');
+        return;
+    }
+    if (roomPeerCount < 2) {
+        alert('当前房间内还没有第二台设备，请等待对方加入同一个房间');
+        return;
+    }
+
     setupRTC();
 
     const abMode = abModeEl ? String(abModeEl.value || '').toLowerCase() : 'random';
@@ -298,6 +403,7 @@ document.getElementById('callBtn').onclick = async () => {
         autoStart: collectMode === 'auto',
         abGroup: chosenAbGroup,
         abMode: abMode,
+        roomId: currentRoomId,
     });
 };
 
@@ -408,6 +514,7 @@ function startDataCollection() {
         trace.scenario = activeScenario;
         trace.traceStartTs = activeTraceStartTs;
         trace.sessionId = sessionId.toString();
+        trace.roomId = currentRoomId;
 
         socket.emit('ab_trace_data', trace);
 
