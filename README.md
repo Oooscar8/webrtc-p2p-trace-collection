@@ -558,6 +558,27 @@ python3 tools/qoe_report.py \
 - `output/qoe_segments.csv`：每条 trace 按 client 统计的 QoE 指标
 - `output/qoe_ab_summary.csv`：按 `(scenario, ab_group)` 聚合的 A/B 对比表
 
+#### 6.4 显著性检验（p 值）
+
+如果你希望判断某个 QoE 指标在 GCC vs RL 之间的差异是否可能由随机波动造成，可以基于 `output/qoe_segments.csv` 做显著性检验。
+
+本仓库提供 `tools/qoe_significance.py`，默认对每个 `scenario`、每个指标执行 **Welch t-test（双侧）**，并输出 p 值；也支持更保守的 trace 级别聚合检验。
+
+```bash
+# 1) 先生成 QoE 报告（得到 qoe_segments.csv）
+python3 tools/qoe_report.py --input ab_test_csv --outdir output
+
+# 2) 计算显著性检验（p 值）
+python3 tools/qoe_significance.py --segments output/qoe_segments.csv --outdir output
+
+# 可选：更保守的 trace 级别检验（建议论文/报告中使用）
+python3 tools/qoe_significance.py --segments output/qoe_segments.csv --outdir output --unit trace
+```
+
+输出文件：
+
+- `output/qoe_significance.csv`：每个 `(scenario, metric)` 的样本量、均值差、t 统计量、自由度与 p 值；默认同时给出 BH-FDR 校正后的 `p_value_bh` 以便多重比较。
+
 ***
 
 ## 平台两种功能（完全隔离）
