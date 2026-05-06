@@ -1,0 +1,31 @@
+{
+  "state_cols": [
+    "send_bps",
+    "recv_bps",
+    "rtt_ms",
+    "loss_rate",
+    "jitter_ms"
+  ],
+  "state_cols_source": [
+    "send_bps",
+    "recv_bps",
+    "rtt_ms",
+    "loss_rate",
+    "jitter"
+  ],
+  "window_size": 10,
+  "state_dim": 50,
+  "state_layout": "feature_major",
+  "normalization_method": "schaferct_fixed_scale_clip",
+  "state_scales": [
+    9.999999974752427e-07,
+    9.999999974752427e-07,
+    0.009999999776482582,
+    1.0,
+    0.009999999776482582
+  ],
+  "clip_min": -10.0,
+  "clip_max": 10.0,
+  "action_col": "estimated_bw_bps",
+  "observations_normalized": true
+}

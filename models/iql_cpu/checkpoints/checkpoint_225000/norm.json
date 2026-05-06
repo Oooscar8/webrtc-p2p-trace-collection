@@ -1,0 +1,35 @@
+{
+  "state_cols": [
+    "send_bps",
+    "recv_bps",
+    "rtt_ms",
+    "loss_rate",
+    "jitter_ms"
+  ],
+  "window_size": 10,
+  "state_dim": 50,
+  "state_layout": "feature_major",
+  "feature_mean": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "feature_std": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "observations_normalized": true,
+  "action_unit": "mbps",
+  "action_scale_bps": 1000000.0,
+  "max_action_mbps": 6.342251300811768,
+  "max_action_bps": 6342251.300811768,
+  "actor_type": "gaussian",
+  "checkpoint_step": 225000,
+  "val_mse": 4.07819194898309,
+  "val_nll": 2.1281843614316727
+}

@@ -1,0 +1,366 @@
+---------------------------------------
+Training IQL with Schaferct-style updates
+{"dataset": "rl_dataset/transitions.npz", "samples": 109393, "train_samples": 98453, "val_samples": 10940, "state_dim": 50, "window_size": 10, "max_action_mbps": 6.342251300811768, "device": "cpu", "num_threads": 4, "num_interop_threads": 1, "actor_type": "gaussian"}
+---------------------------------------
+step=1 q_loss=0.718331 v_loss=0.023622 actor_loss=1.973836 q_score=0.144429
+step=1000 q_loss=0.103147 v_loss=0.000630 actor_loss=2.225757 q_score=0.819967
+step=2000 q_loss=0.414639 v_loss=0.002495 actor_loss=2.512154 q_score=2.317054
+step=3000 q_loss=0.782527 v_loss=0.003463 actor_loss=2.180995 q_score=2.472794
+step=4000 q_loss=0.898103 v_loss=0.006910 actor_loss=2.531212 q_score=2.963512
+step=5000 q_loss=0.895451 v_loss=0.012458 actor_loss=1.935902 q_score=4.427419
+eval step=5000 val_mse=4.078192 val_nll=2.124444
+step=6000 q_loss=1.498480 v_loss=0.037901 actor_loss=4.194800 q_score=4.952103
+step=7000 q_loss=3.174811 v_loss=0.019540 actor_loss=2.275746 q_score=5.149529
+step=8000 q_loss=2.937847 v_loss=0.024389 actor_loss=2.790226 q_score=6.612818
+step=9000 q_loss=5.574761 v_loss=0.025152 actor_loss=2.466133 q_score=7.108297
+step=10000 q_loss=4.066649 v_loss=0.034304 actor_loss=2.655107 q_score=8.162613
+eval step=10000 val_mse=4.078192 val_nll=2.130798
+step=11000 q_loss=2.949825 v_loss=0.037446 actor_loss=3.100982 q_score=7.326616
+step=12000 q_loss=7.443053 v_loss=0.083043 actor_loss=2.356297 q_score=10.450636
+step=13000 q_loss=5.612522 v_loss=0.041655 actor_loss=2.358440 q_score=9.467421
+step=14000 q_loss=4.206029 v_loss=0.103986 actor_loss=2.627497 q_score=9.016213
+step=15000 q_loss=5.824653 v_loss=0.085629 actor_loss=2.610371 q_score=9.381498
+eval step=15000 val_mse=4.078192 val_nll=2.130731
+step=16000 q_loss=3.346078 v_loss=0.071719 actor_loss=3.503473 q_score=12.344235
+step=17000 q_loss=3.531262 v_loss=0.061483 actor_loss=2.616048 q_score=13.264921
+step=18000 q_loss=4.130362 v_loss=0.069180 actor_loss=2.465187 q_score=10.868988
+step=19000 q_loss=4.064464 v_loss=0.115848 actor_loss=3.729689 q_score=12.788431
+step=20000 q_loss=12.747554 v_loss=0.155567 actor_loss=2.293184 q_score=12.643969
+eval step=20000 val_mse=4.078192 val_nll=2.127012
+step=21000 q_loss=10.710157 v_loss=0.125414 actor_loss=3.507898 q_score=13.987250
+step=22000 q_loss=7.396079 v_loss=0.077878 actor_loss=3.821489 q_score=13.525615
+step=23000 q_loss=4.512506 v_loss=0.111291 actor_loss=4.734626 q_score=12.269686
+step=24000 q_loss=15.985041 v_loss=0.134981 actor_loss=5.645895 q_score=13.541273
+step=25000 q_loss=10.295757 v_loss=0.126654 actor_loss=3.484170 q_score=15.402731
+eval step=25000 val_mse=4.078192 val_nll=2.123209
+step=26000 q_loss=4.951301 v_loss=0.142813 actor_loss=2.010319 q_score=16.867954
+step=27000 q_loss=6.227660 v_loss=0.192540 actor_loss=7.055977 q_score=16.347904
+step=28000 q_loss=4.788266 v_loss=0.191842 actor_loss=6.786918 q_score=15.983846
+step=29000 q_loss=8.558407 v_loss=0.142538 actor_loss=5.629252 q_score=15.184047
+step=30000 q_loss=3.850575 v_loss=0.170981 actor_loss=2.162727 q_score=15.423664
+eval step=30000 val_mse=4.078192 val_nll=2.122571
+step=31000 q_loss=4.311966 v_loss=0.182468 actor_loss=10.478432 q_score=16.007401
+step=32000 q_loss=5.318890 v_loss=0.237492 actor_loss=4.788066 q_score=17.061497
+step=33000 q_loss=17.464565 v_loss=0.137770 actor_loss=6.883445 q_score=17.337147
+step=34000 q_loss=4.497763 v_loss=0.163723 actor_loss=6.099170 q_score=16.360634
+step=35000 q_loss=11.600150 v_loss=0.139578 actor_loss=3.802879 q_score=15.154476
+eval step=35000 val_mse=4.078192 val_nll=2.122038
+step=36000 q_loss=4.696030 v_loss=0.212592 actor_loss=7.277499 q_score=15.658920
+step=37000 q_loss=6.380282 v_loss=0.258191 actor_loss=2.999263 q_score=15.846176
+step=38000 q_loss=12.028934 v_loss=0.251246 actor_loss=11.869051 q_score=16.508974
+step=39000 q_loss=11.786085 v_loss=0.197519 actor_loss=10.421986 q_score=17.361614
+step=40000 q_loss=4.527140 v_loss=0.175158 actor_loss=7.667101 q_score=17.397842
+eval step=40000 val_mse=4.078192 val_nll=2.121818
+step=41000 q_loss=12.794460 v_loss=0.167697 actor_loss=4.337996 q_score=18.783144
+step=42000 q_loss=5.126370 v_loss=0.149300 actor_loss=3.753192 q_score=17.031986
+step=43000 q_loss=10.904919 v_loss=0.256118 actor_loss=4.413692 q_score=17.420650
+step=44000 q_loss=3.310478 v_loss=0.177135 actor_loss=6.501365 q_score=17.582321
+step=45000 q_loss=6.160811 v_loss=0.287310 actor_loss=5.709684 q_score=16.402189
+eval step=45000 val_mse=4.078192 val_nll=2.121858
+step=46000 q_loss=10.094004 v_loss=0.194821 actor_loss=6.564710 q_score=16.923714
+step=47000 q_loss=15.703053 v_loss=0.175518 actor_loss=7.270809 q_score=17.040602
+step=48000 q_loss=5.087158 v_loss=0.155693 actor_loss=3.162944 q_score=16.670845
+step=49000 q_loss=4.829331 v_loss=0.209200 actor_loss=3.755940 q_score=16.703657
+step=50000 q_loss=18.121250 v_loss=0.402873 actor_loss=16.558636 q_score=17.258106
+eval step=50000 val_mse=4.078192 val_nll=2.121768
+step=51000 q_loss=5.778816 v_loss=0.201077 actor_loss=4.061623 q_score=15.924879
+step=52000 q_loss=10.557704 v_loss=0.370557 actor_loss=12.889936 q_score=15.950159
+step=53000 q_loss=6.861463 v_loss=0.262044 actor_loss=14.901269 q_score=19.844246
+step=54000 q_loss=15.743441 v_loss=0.289262 actor_loss=8.957760 q_score=18.948963
+step=55000 q_loss=5.467369 v_loss=0.277944 actor_loss=4.587963 q_score=16.536591
+eval step=55000 val_mse=4.078192 val_nll=2.121832
+step=56000 q_loss=7.162408 v_loss=0.269467 actor_loss=4.999791 q_score=17.370808
+step=57000 q_loss=8.162594 v_loss=0.206788 actor_loss=7.909348 q_score=19.315584
+step=58000 q_loss=18.139746 v_loss=0.277753 actor_loss=8.991077 q_score=17.975193
+step=59000 q_loss=15.765181 v_loss=0.201838 actor_loss=6.230989 q_score=16.911283
+step=60000 q_loss=5.150209 v_loss=0.264536 actor_loss=4.193332 q_score=17.376198
+eval step=60000 val_mse=4.078192 val_nll=2.121932
+step=61000 q_loss=14.702371 v_loss=0.554408 actor_loss=7.820846 q_score=17.530783
+step=62000 q_loss=10.530897 v_loss=0.264930 actor_loss=7.064014 q_score=19.099182
+step=63000 q_loss=7.113951 v_loss=0.214153 actor_loss=6.344108 q_score=16.813009
+step=64000 q_loss=12.661324 v_loss=0.436400 actor_loss=6.340988 q_score=17.785061
+step=65000 q_loss=4.465923 v_loss=0.228106 actor_loss=5.959680 q_score=19.601280
+eval step=65000 val_mse=4.078192 val_nll=2.121921
+step=66000 q_loss=7.154049 v_loss=0.269462 actor_loss=5.032580 q_score=18.822525
+step=67000 q_loss=5.758007 v_loss=0.235407 actor_loss=11.106058 q_score=17.086958
+step=68000 q_loss=6.956857 v_loss=0.205227 actor_loss=8.061090 q_score=17.579460
+step=69000 q_loss=8.423078 v_loss=0.248748 actor_loss=3.376227 q_score=17.864536
+step=70000 q_loss=7.632687 v_loss=0.237890 actor_loss=4.997928 q_score=13.994636
+eval step=70000 val_mse=4.078192 val_nll=2.122835
+step=71000 q_loss=9.505752 v_loss=0.222536 actor_loss=7.132652 q_score=16.247864
+step=72000 q_loss=7.195931 v_loss=0.296967 actor_loss=9.837727 q_score=15.969044
+step=73000 q_loss=24.074703 v_loss=0.315552 actor_loss=8.333794 q_score=17.612534
+step=74000 q_loss=11.732679 v_loss=0.406650 actor_loss=11.465041 q_score=18.136919
+step=75000 q_loss=5.683524 v_loss=0.223593 actor_loss=3.062492 q_score=15.675210
+eval step=75000 val_mse=4.078192 val_nll=2.121894
+step=76000 q_loss=11.409863 v_loss=0.193461 actor_loss=7.165563 q_score=15.605791
+step=77000 q_loss=17.730068 v_loss=0.308780 actor_loss=11.275072 q_score=18.780277
+step=78000 q_loss=14.545878 v_loss=0.265107 actor_loss=7.819746 q_score=19.020237
+step=79000 q_loss=11.492905 v_loss=0.399062 actor_loss=5.653322 q_score=18.926418
+step=80000 q_loss=17.104908 v_loss=0.353623 actor_loss=6.302769 q_score=18.944756
+eval step=80000 val_mse=4.078192 val_nll=2.122619
+step=81000 q_loss=19.412670 v_loss=0.233291 actor_loss=7.145686 q_score=16.949892
+step=82000 q_loss=7.195604 v_loss=0.347927 actor_loss=3.961394 q_score=15.810417
+step=83000 q_loss=5.395998 v_loss=0.302456 actor_loss=9.905014 q_score=16.999668
+step=84000 q_loss=10.773106 v_loss=0.340648 actor_loss=4.051168 q_score=19.197815
+step=85000 q_loss=6.476004 v_loss=0.307492 actor_loss=9.073017 q_score=13.902115
+eval step=85000 val_mse=4.078192 val_nll=2.123322
+step=86000 q_loss=5.073524 v_loss=0.425691 actor_loss=7.630439 q_score=20.339672
+step=87000 q_loss=17.381407 v_loss=0.285161 actor_loss=10.558863 q_score=17.830605
+step=88000 q_loss=5.652113 v_loss=0.292710 actor_loss=9.043377 q_score=15.704875
+step=89000 q_loss=10.465124 v_loss=0.453193 actor_loss=9.920944 q_score=18.496805
+step=90000 q_loss=11.400517 v_loss=0.270074 actor_loss=6.625664 q_score=16.721043
+eval step=90000 val_mse=4.078192 val_nll=2.124470
+step=91000 q_loss=20.251804 v_loss=0.311519 actor_loss=13.831975 q_score=18.211697
+step=92000 q_loss=6.410924 v_loss=0.355668 actor_loss=12.842214 q_score=15.655092
+step=93000 q_loss=9.945812 v_loss=0.296336 actor_loss=8.977601 q_score=16.467020
+step=94000 q_loss=11.941265 v_loss=0.292817 actor_loss=4.498018 q_score=16.610462
+step=95000 q_loss=8.531927 v_loss=0.250179 actor_loss=6.217494 q_score=15.646868
+eval step=95000 val_mse=4.078192 val_nll=2.124032
+step=96000 q_loss=10.973764 v_loss=0.232191 actor_loss=9.932234 q_score=14.724835
+step=97000 q_loss=7.959602 v_loss=0.253916 actor_loss=4.956265 q_score=16.994560
+step=98000 q_loss=22.196478 v_loss=0.300235 actor_loss=12.048148 q_score=14.914720
+step=99000 q_loss=4.914801 v_loss=0.290547 actor_loss=9.351317 q_score=16.418671
+step=100000 q_loss=8.721105 v_loss=0.461061 actor_loss=4.101052 q_score=18.226357
+eval step=100000 val_mse=4.078192 val_nll=2.123895
+step=101000 q_loss=5.764970 v_loss=0.295902 actor_loss=8.294480 q_score=18.499737
+step=102000 q_loss=7.952005 v_loss=0.342644 actor_loss=9.495926 q_score=14.474622
+step=103000 q_loss=4.995318 v_loss=0.279355 actor_loss=9.615646 q_score=17.624468
+step=104000 q_loss=6.756054 v_loss=0.303001 actor_loss=7.346731 q_score=17.216427
+step=105000 q_loss=12.455997 v_loss=0.333911 actor_loss=5.948330 q_score=17.892521
+eval step=105000 val_mse=4.078192 val_nll=2.123017
+step=106000 q_loss=9.775021 v_loss=0.252937 actor_loss=11.473996 q_score=15.488102
+step=107000 q_loss=19.736870 v_loss=0.292641 actor_loss=3.093644 q_score=16.724424
+step=108000 q_loss=5.352086 v_loss=0.350218 actor_loss=24.084068 q_score=16.318649
+step=109000 q_loss=4.400806 v_loss=0.262168 actor_loss=4.665927 q_score=15.545263
+step=110000 q_loss=4.767380 v_loss=0.234685 actor_loss=8.652663 q_score=15.983911
+eval step=110000 val_mse=4.078192 val_nll=2.123876
+step=111000 q_loss=5.707051 v_loss=0.353761 actor_loss=6.685122 q_score=15.574842
+step=112000 q_loss=12.577759 v_loss=0.351747 actor_loss=14.290445 q_score=18.221004
+step=113000 q_loss=17.182043 v_loss=0.454752 actor_loss=19.272003 q_score=17.524555
+step=114000 q_loss=8.662069 v_loss=0.380534 actor_loss=16.319458 q_score=15.792822
+step=115000 q_loss=6.723942 v_loss=0.315350 actor_loss=6.918336 q_score=15.770880
+eval step=115000 val_mse=4.078192 val_nll=2.124094
+step=116000 q_loss=5.914538 v_loss=0.337899 actor_loss=15.693900 q_score=15.469034
+step=117000 q_loss=10.646487 v_loss=0.350118 actor_loss=9.590976 q_score=17.033154
+step=118000 q_loss=5.226365 v_loss=0.316540 actor_loss=4.481185 q_score=14.881495
+step=119000 q_loss=6.844607 v_loss=0.335876 actor_loss=5.924625 q_score=14.111344
+step=120000 q_loss=12.579481 v_loss=0.295935 actor_loss=6.306571 q_score=16.357147
+eval step=120000 val_mse=4.078192 val_nll=2.123273
+step=121000 q_loss=4.586802 v_loss=0.433704 actor_loss=20.771076 q_score=14.696194
+step=122000 q_loss=5.081019 v_loss=0.352234 actor_loss=12.279965 q_score=15.632813
+step=123000 q_loss=6.140001 v_loss=0.354834 actor_loss=12.194423 q_score=17.931417
+step=124000 q_loss=8.374712 v_loss=0.296015 actor_loss=5.158621 q_score=16.018236
+step=125000 q_loss=12.426862 v_loss=0.390124 actor_loss=11.049802 q_score=16.580498
+eval step=125000 val_mse=4.078192 val_nll=2.125362
+step=126000 q_loss=7.148785 v_loss=0.262711 actor_loss=6.479981 q_score=18.604774
+step=127000 q_loss=7.731567 v_loss=0.358315 actor_loss=9.665850 q_score=14.944221
+step=128000 q_loss=4.713668 v_loss=0.420675 actor_loss=14.819608 q_score=16.366932
+step=129000 q_loss=5.875285 v_loss=0.380880 actor_loss=4.812650 q_score=13.316576
+step=130000 q_loss=11.208871 v_loss=0.301861 actor_loss=10.195976 q_score=15.174114
+eval step=130000 val_mse=4.078192 val_nll=2.124376
+step=131000 q_loss=15.822083 v_loss=0.570679 actor_loss=8.926573 q_score=16.734161
+step=132000 q_loss=5.140982 v_loss=0.234433 actor_loss=4.022070 q_score=14.855202
+step=133000 q_loss=7.897701 v_loss=0.330395 actor_loss=9.854526 q_score=16.791676
+step=134000 q_loss=7.419569 v_loss=0.295712 actor_loss=7.914032 q_score=17.728437
+step=135000 q_loss=4.848573 v_loss=0.431955 actor_loss=8.783578 q_score=15.783587
+eval step=135000 val_mse=4.078192 val_nll=2.124336
+step=136000 q_loss=6.997323 v_loss=0.306309 actor_loss=11.393260 q_score=16.256498
+step=137000 q_loss=4.291693 v_loss=0.376586 actor_loss=7.773008 q_score=15.033675
+step=138000 q_loss=4.958759 v_loss=0.507253 actor_loss=31.391239 q_score=18.851120
+step=139000 q_loss=3.954435 v_loss=0.283419 actor_loss=12.898935 q_score=18.099247
+step=140000 q_loss=6.513829 v_loss=0.260229 actor_loss=8.661542 q_score=13.858041
+eval step=140000 val_mse=4.078192 val_nll=2.125550
+step=141000 q_loss=13.939806 v_loss=0.525192 actor_loss=17.454782 q_score=17.034678
+step=142000 q_loss=7.056903 v_loss=0.346852 actor_loss=9.915131 q_score=14.815972
+step=143000 q_loss=12.172235 v_loss=0.403936 actor_loss=15.501314 q_score=15.884876
+step=144000 q_loss=5.085475 v_loss=0.276231 actor_loss=5.464149 q_score=16.442223
+step=145000 q_loss=3.963779 v_loss=0.289386 actor_loss=12.227245 q_score=16.675917
+eval step=145000 val_mse=4.078192 val_nll=2.125338
+step=146000 q_loss=4.473412 v_loss=0.375049 actor_loss=5.857255 q_score=14.861748
+step=147000 q_loss=4.706798 v_loss=0.364817 actor_loss=9.902218 q_score=15.578212
+step=148000 q_loss=6.819309 v_loss=0.292839 actor_loss=17.738405 q_score=13.660539
+step=149000 q_loss=6.804807 v_loss=0.307060 actor_loss=7.626476 q_score=11.561966
+step=150000 q_loss=4.176015 v_loss=0.303715 actor_loss=13.879270 q_score=14.106627
+eval step=150000 val_mse=4.078192 val_nll=2.125271
+step=151000 q_loss=5.035771 v_loss=0.323169 actor_loss=8.767709 q_score=14.673224
+step=152000 q_loss=4.486260 v_loss=0.341833 actor_loss=6.118591 q_score=13.751744
+step=153000 q_loss=7.070144 v_loss=0.305887 actor_loss=9.388116 q_score=15.671556
+step=154000 q_loss=5.641253 v_loss=0.326039 actor_loss=15.373367 q_score=15.972864
+step=155000 q_loss=6.016232 v_loss=0.355719 actor_loss=15.430680 q_score=14.596031
+eval step=155000 val_mse=4.078192 val_nll=2.125468
+step=156000 q_loss=13.667686 v_loss=0.363871 actor_loss=11.200404 q_score=15.749740
+step=157000 q_loss=9.095764 v_loss=0.355851 actor_loss=12.534883 q_score=18.610302
+step=158000 q_loss=7.287084 v_loss=0.376714 actor_loss=7.268381 q_score=14.479966
+step=159000 q_loss=13.249098 v_loss=0.319754 actor_loss=6.607070 q_score=13.553880
+step=160000 q_loss=14.332325 v_loss=0.460753 actor_loss=5.342251 q_score=15.203510
+eval step=160000 val_mse=4.078192 val_nll=2.126297
+step=161000 q_loss=21.406204 v_loss=0.793171 actor_loss=6.411545 q_score=13.182022
+step=162000 q_loss=7.399695 v_loss=0.345605 actor_loss=13.382761 q_score=16.998352
+step=163000 q_loss=13.733044 v_loss=0.347764 actor_loss=12.623257 q_score=15.922384
+step=164000 q_loss=6.919758 v_loss=0.590663 actor_loss=11.031547 q_score=14.672654
+step=165000 q_loss=4.998713 v_loss=0.369758 actor_loss=15.346167 q_score=14.211892
+eval step=165000 val_mse=4.078192 val_nll=2.126153
+step=166000 q_loss=8.165791 v_loss=0.565216 actor_loss=11.282508 q_score=13.587399
+step=167000 q_loss=18.409351 v_loss=0.293169 actor_loss=15.082752 q_score=13.704691
+step=168000 q_loss=12.177547 v_loss=0.343496 actor_loss=14.272242 q_score=14.158266
+step=169000 q_loss=4.024123 v_loss=0.442209 actor_loss=25.625128 q_score=14.794785
+step=170000 q_loss=4.973087 v_loss=0.409175 actor_loss=10.820096 q_score=16.006929
+eval step=170000 val_mse=4.078192 val_nll=2.126835
+step=171000 q_loss=10.645578 v_loss=0.356490 actor_loss=9.541405 q_score=13.934185
+step=172000 q_loss=12.507713 v_loss=0.335885 actor_loss=10.077499 q_score=16.733974
+step=173000 q_loss=5.701683 v_loss=0.313605 actor_loss=11.421388 q_score=12.068699
+step=174000 q_loss=9.408915 v_loss=0.454700 actor_loss=5.448861 q_score=13.853163
+step=175000 q_loss=5.590117 v_loss=0.338804 actor_loss=12.386129 q_score=15.424276
+eval step=175000 val_mse=4.078192 val_nll=2.126308
+step=176000 q_loss=4.743911 v_loss=0.313030 actor_loss=13.224146 q_score=15.197573
+step=177000 q_loss=6.346167 v_loss=0.346654 actor_loss=10.713179 q_score=15.214231
+step=178000 q_loss=5.694471 v_loss=0.343952 actor_loss=10.506449 q_score=17.009205
+step=179000 q_loss=6.621271 v_loss=0.312432 actor_loss=5.695765 q_score=13.297043
+step=180000 q_loss=8.419569 v_loss=0.392120 actor_loss=12.389093 q_score=13.431583
+eval step=180000 val_mse=4.078192 val_nll=2.126881
+step=181000 q_loss=12.334327 v_loss=0.673123 actor_loss=12.094795 q_score=16.912949
+step=182000 q_loss=10.780960 v_loss=0.510473 actor_loss=15.971523 q_score=15.923811
+step=183000 q_loss=5.930500 v_loss=0.434665 actor_loss=10.235168 q_score=14.149784
+step=184000 q_loss=7.816117 v_loss=0.350114 actor_loss=13.706336 q_score=14.730209
+step=185000 q_loss=5.172490 v_loss=0.390325 actor_loss=12.946704 q_score=14.959318
+eval step=185000 val_mse=4.078192 val_nll=2.127255
+step=186000 q_loss=6.294269 v_loss=0.720446 actor_loss=22.469303 q_score=15.358887
+step=187000 q_loss=13.421448 v_loss=0.642588 actor_loss=10.654628 q_score=13.830837
+step=188000 q_loss=4.371594 v_loss=0.490042 actor_loss=10.928602 q_score=16.108568
+step=189000 q_loss=7.649880 v_loss=0.385429 actor_loss=5.874211 q_score=14.473442
+step=190000 q_loss=12.915252 v_loss=0.543509 actor_loss=11.813223 q_score=15.727216
+eval step=190000 val_mse=4.078192 val_nll=2.127916
+step=191000 q_loss=10.467389 v_loss=0.507879 actor_loss=5.008922 q_score=12.839975
+step=192000 q_loss=12.500590 v_loss=0.437560 actor_loss=16.306829 q_score=15.139153
+step=193000 q_loss=14.122976 v_loss=0.444036 actor_loss=8.214221 q_score=14.533109
+step=194000 q_loss=10.923290 v_loss=0.323993 actor_loss=8.885544 q_score=12.065510
+step=195000 q_loss=5.770596 v_loss=0.487790 actor_loss=5.876161 q_score=14.783082
+eval step=195000 val_mse=4.078192 val_nll=2.127576
+step=196000 q_loss=5.078365 v_loss=0.372325 actor_loss=8.133779 q_score=14.057959
+step=197000 q_loss=6.269617 v_loss=0.371745 actor_loss=7.595774 q_score=15.639449
+step=198000 q_loss=9.632323 v_loss=0.337250 actor_loss=13.052346 q_score=13.589781
+step=199000 q_loss=7.641196 v_loss=0.774255 actor_loss=16.731943 q_score=13.686279
+step=200000 q_loss=4.429330 v_loss=0.459469 actor_loss=4.763423 q_score=10.662402
+eval step=200000 val_mse=4.078192 val_nll=2.128611
+step=201000 q_loss=5.394534 v_loss=0.575883 actor_loss=10.972526 q_score=12.107765
+step=202000 q_loss=8.143691 v_loss=0.374331 actor_loss=10.431957 q_score=12.805466
+step=203000 q_loss=12.127426 v_loss=0.386374 actor_loss=12.512030 q_score=14.016701
+step=204000 q_loss=14.553890 v_loss=0.701638 actor_loss=8.942707 q_score=13.667778
+step=205000 q_loss=3.845374 v_loss=1.647466 actor_loss=18.627579 q_score=15.799600
+eval step=205000 val_mse=4.078192 val_nll=2.128925
+step=206000 q_loss=5.501877 v_loss=0.302310 actor_loss=9.218613 q_score=14.128284
+step=207000 q_loss=4.983079 v_loss=0.316328 actor_loss=14.732333 q_score=13.740824
+step=208000 q_loss=5.354987 v_loss=0.334678 actor_loss=9.674246 q_score=14.797071
+step=209000 q_loss=5.304151 v_loss=0.498706 actor_loss=24.587479 q_score=16.674078
+step=210000 q_loss=5.227558 v_loss=0.371152 actor_loss=8.053679 q_score=15.488941
+eval step=210000 val_mse=4.078192 val_nll=2.128548
+step=211000 q_loss=19.070425 v_loss=0.329725 actor_loss=9.063860 q_score=10.245457
+step=212000 q_loss=6.595421 v_loss=0.530210 actor_loss=15.032817 q_score=14.594810
+step=213000 q_loss=14.913798 v_loss=0.873176 actor_loss=8.217800 q_score=11.671597
+step=214000 q_loss=5.586361 v_loss=0.321753 actor_loss=9.285332 q_score=14.837990
+step=215000 q_loss=6.825367 v_loss=0.488160 actor_loss=3.755856 q_score=12.341509
+eval step=215000 val_mse=4.078192 val_nll=2.128748
+step=216000 q_loss=6.553678 v_loss=0.499135 actor_loss=12.781260 q_score=13.167885
+step=217000 q_loss=10.180044 v_loss=0.332017 actor_loss=9.292800 q_score=14.418284
+step=218000 q_loss=6.416338 v_loss=0.475955 actor_loss=25.923883 q_score=13.010218
+step=219000 q_loss=4.865099 v_loss=0.470715 actor_loss=8.883417 q_score=12.056454
+step=220000 q_loss=16.393101 v_loss=0.549026 actor_loss=9.186958 q_score=13.418612
+eval step=220000 val_mse=4.078192 val_nll=2.128158
+step=221000 q_loss=6.744761 v_loss=0.418315 actor_loss=15.057441 q_score=15.350407
+step=222000 q_loss=15.154539 v_loss=0.552011 actor_loss=23.269093 q_score=13.079102
+step=223000 q_loss=4.962176 v_loss=0.461681 actor_loss=15.065668 q_score=16.320705
+step=224000 q_loss=4.906436 v_loss=0.419372 actor_loss=17.050560 q_score=12.368826
+step=225000 q_loss=4.567897 v_loss=0.424335 actor_loss=10.401678 q_score=12.536076
+eval step=225000 val_mse=4.078192 val_nll=2.128184
+step=226000 q_loss=6.914595 v_loss=0.456942 actor_loss=18.742466 q_score=13.370871
+step=227000 q_loss=5.694747 v_loss=0.298470 actor_loss=7.421517 q_score=11.868199
+step=228000 q_loss=5.794730 v_loss=0.355157 actor_loss=17.051609 q_score=12.487956
+step=229000 q_loss=14.264527 v_loss=0.511965 actor_loss=8.966101 q_score=12.601539
+step=230000 q_loss=5.933134 v_loss=0.384755 actor_loss=14.961556 q_score=12.031952
+eval step=230000 val_mse=4.078192 val_nll=2.128302
+step=231000 q_loss=5.779362 v_loss=1.107844 actor_loss=11.301828 q_score=11.185516
+step=232000 q_loss=2.589211 v_loss=0.346062 actor_loss=14.951266 q_score=14.048468
+step=233000 q_loss=4.490678 v_loss=0.361647 actor_loss=10.951099 q_score=12.806407
+step=234000 q_loss=7.336984 v_loss=0.492253 actor_loss=11.310944 q_score=12.977360
+step=235000 q_loss=3.683435 v_loss=0.359048 actor_loss=10.500244 q_score=11.880158
+eval step=235000 val_mse=4.078192 val_nll=2.128587
+step=236000 q_loss=5.452169 v_loss=0.438465 actor_loss=11.860655 q_score=12.208884
+step=237000 q_loss=14.047732 v_loss=0.585199 actor_loss=13.231824 q_score=14.628273
+step=238000 q_loss=8.034562 v_loss=0.610601 actor_loss=10.005896 q_score=13.060011
+step=239000 q_loss=6.396622 v_loss=0.392807 actor_loss=8.783299 q_score=13.673969
+step=240000 q_loss=5.580312 v_loss=0.391456 actor_loss=12.498178 q_score=15.427078
+eval step=240000 val_mse=4.078192 val_nll=2.128604
+step=241000 q_loss=4.846339 v_loss=0.519615 actor_loss=12.715088 q_score=13.669211
+step=242000 q_loss=7.747250 v_loss=0.598835 actor_loss=21.995001 q_score=12.217845
+step=243000 q_loss=4.657705 v_loss=0.561053 actor_loss=16.214127 q_score=14.645750
+step=244000 q_loss=17.779266 v_loss=0.479150 actor_loss=7.618280 q_score=13.043631
+step=245000 q_loss=6.356223 v_loss=0.402081 actor_loss=13.842488 q_score=12.286329
+eval step=245000 val_mse=4.078192 val_nll=2.128989
+step=246000 q_loss=6.074312 v_loss=0.405094 actor_loss=7.420823 q_score=11.064646
+step=247000 q_loss=4.330822 v_loss=0.517825 actor_loss=13.165045 q_score=13.359039
+step=248000 q_loss=4.987694 v_loss=0.404772 actor_loss=13.051006 q_score=11.744907
+step=249000 q_loss=5.937836 v_loss=0.693742 actor_loss=12.851151 q_score=14.771318
+step=250000 q_loss=11.296276 v_loss=0.429791 actor_loss=8.473236 q_score=9.084408
+eval step=250000 val_mse=4.078192 val_nll=2.128963
+step=251000 q_loss=5.338917 v_loss=0.397434 actor_loss=8.560777 q_score=12.489257
+step=252000 q_loss=13.611728 v_loss=0.453685 actor_loss=22.320187 q_score=13.897373
+step=253000 q_loss=4.817470 v_loss=0.533570 actor_loss=28.091043 q_score=14.430674
+step=254000 q_loss=5.955892 v_loss=0.841294 actor_loss=13.930155 q_score=15.161470
+step=255000 q_loss=7.416706 v_loss=0.393910 actor_loss=12.202209 q_score=12.595911
+eval step=255000 val_mse=4.078192 val_nll=2.129205
+step=256000 q_loss=13.400837 v_loss=0.537229 actor_loss=7.180405 q_score=13.966631
+step=257000 q_loss=8.278610 v_loss=0.526141 actor_loss=11.569225 q_score=14.322956
+step=258000 q_loss=10.306271 v_loss=0.335133 actor_loss=15.411802 q_score=12.313371
+step=259000 q_loss=4.853874 v_loss=0.343311 actor_loss=11.312155 q_score=10.237943
+step=260000 q_loss=12.280045 v_loss=0.508243 actor_loss=18.975470 q_score=15.004236
+eval step=260000 val_mse=4.078192 val_nll=2.129141
+step=261000 q_loss=6.644273 v_loss=0.669877 actor_loss=8.462239 q_score=11.757104
+step=262000 q_loss=6.808677 v_loss=0.455278 actor_loss=7.049527 q_score=12.505147
+step=263000 q_loss=5.130220 v_loss=0.443483 actor_loss=21.668148 q_score=12.293264
+step=264000 q_loss=17.579697 v_loss=0.416728 actor_loss=11.823137 q_score=12.702717
+step=265000 q_loss=3.745772 v_loss=0.469239 actor_loss=7.462504 q_score=14.349533
+eval step=265000 val_mse=4.078192 val_nll=2.129285
+step=266000 q_loss=16.262819 v_loss=0.878589 actor_loss=14.365437 q_score=13.941721
+step=267000 q_loss=10.397108 v_loss=0.509887 actor_loss=10.371167 q_score=13.440932
+step=268000 q_loss=5.641357 v_loss=0.471596 actor_loss=17.254398 q_score=11.864940
+step=269000 q_loss=9.985014 v_loss=0.431702 actor_loss=10.986659 q_score=12.815194
+step=270000 q_loss=6.287471 v_loss=0.571555 actor_loss=17.449821 q_score=11.526641
+eval step=270000 val_mse=4.078192 val_nll=2.129356
+step=271000 q_loss=9.768513 v_loss=0.539887 actor_loss=6.918546 q_score=11.619257
+step=272000 q_loss=4.998389 v_loss=0.482579 actor_loss=22.542423 q_score=14.797525
+step=273000 q_loss=7.409710 v_loss=0.392030 actor_loss=7.204405 q_score=11.956547
+step=274000 q_loss=7.645753 v_loss=0.395746 actor_loss=18.979248 q_score=10.865119
+step=275000 q_loss=6.749741 v_loss=0.838496 actor_loss=16.349318 q_score=12.645020
+eval step=275000 val_mse=4.078192 val_nll=2.129377
+step=276000 q_loss=4.333614 v_loss=0.506591 actor_loss=12.959589 q_score=12.496628
+step=277000 q_loss=7.812631 v_loss=0.410682 actor_loss=12.174901 q_score=15.796017
+step=278000 q_loss=4.330995 v_loss=0.440005 actor_loss=11.280403 q_score=14.679169
+step=279000 q_loss=4.246894 v_loss=0.525031 actor_loss=16.297091 q_score=13.156773
+step=280000 q_loss=5.095132 v_loss=0.723305 actor_loss=5.698220 q_score=13.839163
+eval step=280000 val_mse=4.078192 val_nll=2.129439
+step=281000 q_loss=5.052862 v_loss=0.996094 actor_loss=11.266972 q_score=12.721826
+step=282000 q_loss=5.538630 v_loss=1.148901 actor_loss=9.865559 q_score=14.548984
+step=283000 q_loss=11.674623 v_loss=0.513029 actor_loss=7.490116 q_score=11.749396
+step=284000 q_loss=11.818294 v_loss=0.463150 actor_loss=8.605438 q_score=14.038594
+step=285000 q_loss=8.289304 v_loss=0.452654 actor_loss=8.860776 q_score=11.898426
+eval step=285000 val_mse=4.078192 val_nll=2.129491
+step=286000 q_loss=9.775663 v_loss=0.476708 actor_loss=8.221762 q_score=12.128841
+step=287000 q_loss=3.907275 v_loss=0.463578 actor_loss=14.899381 q_score=11.112489
+step=288000 q_loss=14.013561 v_loss=0.426575 actor_loss=10.687348 q_score=10.436602
+step=289000 q_loss=5.332353 v_loss=0.439579 actor_loss=11.980215 q_score=15.402531
+step=290000 q_loss=5.724603 v_loss=0.512142 actor_loss=12.955565 q_score=13.241064
+eval step=290000 val_mse=4.078192 val_nll=2.129520
+step=291000 q_loss=5.106256 v_loss=0.469816 actor_loss=8.922047 q_score=12.719460
+step=292000 q_loss=4.843438 v_loss=0.436381 actor_loss=12.680475 q_score=14.497818
+step=293000 q_loss=4.267062 v_loss=0.393268 actor_loss=8.252417 q_score=10.221844
+step=294000 q_loss=6.281756 v_loss=0.483684 actor_loss=18.857410 q_score=12.698299
+step=295000 q_loss=4.458448 v_loss=0.396283 actor_loss=16.231983 q_score=13.020441
+eval step=295000 val_mse=4.078192 val_nll=2.129530
+step=296000 q_loss=5.875527 v_loss=0.595728 actor_loss=14.184246 q_score=14.163321
+step=297000 q_loss=21.518951 v_loss=1.079204 actor_loss=11.930840 q_score=15.906713
+step=298000 q_loss=7.161339 v_loss=0.464123 actor_loss=24.361862 q_score=11.959282
+step=299000 q_loss=5.877521 v_loss=0.899428 actor_loss=16.908623 q_score=13.071289
+step=300000 q_loss=4.819453 v_loss=0.618217 actor_loss=20.903496 q_score=11.593666
+eval step=300000 val_mse=4.078192 val_nll=2.129530
+saved checkpoints to models/iql_cpu/checkpoints

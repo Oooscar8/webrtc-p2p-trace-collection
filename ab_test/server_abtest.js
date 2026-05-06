@@ -6,16 +6,25 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
+const modelsDir = path.join(__dirname, '..', 'models');
+const onnxruntimeDistDir = path.join(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist');
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(__dirname));
+app.use('/models', express.static(modelsDir));
+app.use('/vendor/onnxruntime', express.static(onnxruntimeDistDir));
 
 // AB Test 输出目录（与 real_video_csv 完全隔离）
 const activeCsvFiles = new Set();
 const header = 'timestamp,clientId,ab_group,rtt_ms,jitter,loss_rate,recv_bps,send_bps,gcc_estimated_bw_bps,policy_max_bitrate_bps,estimated_bw_bps\n';
 const outputDir = path.join(__dirname, '..', 'ab_test_csv');
+const onnxOutputDir = path.join(__dirname, '..', 'ab_test_onnx_csv');
 
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
+}
+if (!fs.existsSync(onnxOutputDir)) {
+    fs.mkdirSync(onnxOutputDir, { recursive: true });
 }
 
 function safeScenario(raw) {
@@ -39,6 +48,11 @@ function safeAbGroup(raw) {
     if (v === 'rl' || v === 'gcc') return v;
     if (v === 'random') return Math.random() < 0.5 ? 'gcc' : 'rl';
     return 'gcc';
+}
+
+function safePolicyMode(raw) {
+    const v = String(raw || '').toLowerCase();
+    return v === 'local' ? 'local' : 'remote';
 }
 
 function safeRoomId(raw) {
@@ -238,9 +252,11 @@ io.on('connection', (socket) => {
         }
 
         const sessionSuffix = String((data && data.sessionId) || 'default').replace(/[^a-z0-9_-]/gi, '_').slice(0, 64);
+        const policyMode = safePolicyMode(data && data.policyMode);
+        const targetOutputDir = policyMode === 'local' ? onnxOutputDir : outputDir;
         const csvFile = traceStartTs
-            ? path.join(outputDir, `webrtc_abtest_traces_${scenario}_${traceStartTs}.csv`)
-            : path.join(outputDir, `webrtc_abtest_traces_${scenario}_${sessionSuffix}.csv`);
+            ? path.join(targetOutputDir, `webrtc_abtest_traces_${scenario}_${traceStartTs}.csv`)
+            : path.join(targetOutputDir, `webrtc_abtest_traces_${scenario}_${sessionSuffix}.csv`);
 
         if (!activeCsvFiles.has(csvFile)) {
             if (!fs.existsSync(csvFile)) {

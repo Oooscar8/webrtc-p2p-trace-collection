@@ -55,10 +55,28 @@
 
         <div style="margin-top: 8px;">
             <label style="margin-right: 12px;"><input type="checkbox" id="enablePolicy" disabled /> RL 限速（实验组自动开启）</label>
+            <label>推理方式：</label>
+            <select id="policyMode" style="padding: 4px;">
+                <option value="local" selected>浏览器本地 ONNX</option>
+                <option value="remote">远端 HTTP 服务</option>
+            </select>
+        </div>
+
+        <div style="margin-top: 8px;" id="localPolicyConfigRow">
+            <label>本地模型：</label>
+            <input type="text" id="policyModelUrl" style="width: 280px; padding: 4px;" />
+            <label style="margin-left: 8px;">归一化：</label>
+            <input type="text" id="policyNormUrl" style="width: 260px; padding: 4px;" />
+        </div>
+
+        <div style="margin-top: 8px;" id="remotePolicyConfigRow">
             <label>推理服务：</label>
             <input type="text" id="policyServerUrl" style="width: 420px; padding: 4px;" />
         </div>
 
+        <div style="margin-top: 8px;">
+            本地策略状态：<span id="policyStatus">未加载</span>
+        </div>
         <div style="margin-top: 8px;">已应用 maxBitrate：<span id="appliedMaxBitrate">-</span> kbps</div>
     </div>
 
@@ -71,6 +89,8 @@
     <video id="remoteVideo" autoplay playsinline style="width: 300px; border: 1px solid black;"></video>
 
     <script src="/socket.io/socket.io.js"></script>
+    <script src="/vendor/onnxruntime/ort.min.js"></script>
+    <script src="policy_runtime.js"></script>
     <script src="ab_test.js"></script>
 </body>
 </html>

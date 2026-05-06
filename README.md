@@ -25,9 +25,9 @@
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐
-│ 4. 部署推理服务  │ → 监听端口 8000
-│ (HTTP/WebSocket) │
+┌───────────────────────────────┐
+│ 4. 部署推理                   │ → HTTP/WebSocket 或 actor.onnx
+│ (Python 服务 / 浏览器本地)    │
 └────────┬────────┘
          │
          ▼
@@ -56,6 +56,7 @@
 ├── ab_test/                # A/B Test（RL vs GCC）
 │   ├── ab_test.html
 │   ├── ab_test.js
+│   ├── policy_runtime.js   # 浏览器本地 ONNX 推理
 │   └── server_abtest.js
 ├── rl/                     # RL 训练与推理服务
 │   ├── train_iql.py       # IQL 离线训练脚本
@@ -63,12 +64,15 @@
 │   └── requirements.txt   # Python 依赖
 ├── tools/                  # 工具脚本
 │   ├── build_rl_dataset.py  # 从 CSV 生成 RL 训练集
+│   ├── export_iql_onnx.py   # 导出 actor.onnx
 │   └── qoe_report.py        # 生成 QoE 对比报告
 ├── models/                 # 模型文件（训练后生成）
-│   └── iql/
-│       ├── actor.pt        # Actor 网络（用于推理）
-│       ├── critics.pt      # Critic 网络（仅训练用）
-│       └── norm.json       # 归一化参数
+│   └── iql_cpu/
+│       └── checkpoints/
+│           └── checkpoint_50000/
+│               ├── actor.pt
+│               ├── actor.onnx
+│               └── norm.json
 ├── real_video_csv/         # 数据集采集 CSV 输出
 ├── ab_test_csv/            # A/B Test CSV 输出
 ├── rl_dataset/             # RL 训练集输出
@@ -254,13 +258,23 @@ python3 -u rl/train_iql.py \
 
 ***
 
-### 步骤 4：部署推理服务（HTTP / WebSocket）
+### 步骤 4：部署推理（两种方式）
+
+当前项目同时支持两种部署方式：
+
+- **方式 A：Python 推理服务（HTTP / WebSocket）**
+- **方式 B：浏览器本地 ONNX 推理**
+
+两种方式都保留，按你的场景选择：
+
+- 如果你想快速联调、手工请求接口、单机验证：优先用 **方式 A**
+- 如果你要在差网络环境下做实时限速 A/B Test：优先用 **方式 B**
+
+#### 4.A Python 推理服务（HTTP / WebSocket）
 
 启动推理服务，供 A/B Test 前端调用。
 
-#### 4.1 启动服务（端口 8000）
-
-先安装 Python 依赖：
+##### 4.A.1 安装 Python 依赖
 
 ```bash
 python3 -m pip install -r rl/requirements.txt
@@ -268,13 +282,15 @@ python3 -m pip install -r rl/requirements.txt
 
 当前 `rl/serve_policy.py` 已与训练产物对齐，能够：
 
-- 读取 `models/iql/norm.json` 中的 `window_size`、`state_dim`、`state_layout`、`actor_type` 等元信息
+- 读取 `norm.json` 中的 `window_size`、`state_dim`、`state_layout`、`actor_type` 等元信息
 - 维护最近 `10` 步状态窗口，并按 feature-major 方式展开成 `5 x 10 = 50` 维输入
 - 使用训练导出的 `actor.pt` 进行在线推理
 - 对 HTTP 和 WebSocket 分别维护推理状态窗口
 - 保留动作平滑、限幅和 fallback 保护逻辑
 
-启动命令：
+##### 4.A.2 启动服务（端口 8000）
+
+如果你使用旧目录结构：
 
 ```bash
 python3 rl/serve_policy.py \
@@ -283,11 +299,18 @@ python3 rl/serve_policy.py \
   --port 8000
 ```
 
-#### 4.2 接口说明
+如果你使用新的 checkpoint 目录结构，例如 `checkpoint_50000`：
 
-**HTTP 接口**：
-
+```bash
+python3 rl/serve_policy.py \
+  --model models/iql_cpu/checkpoints/checkpoint_50000/actor.pt \
+  --norm models/iql_cpu/checkpoints/checkpoint_50000/norm.json \
+  --port 8000
 ```
+
+##### 4.A.3 HTTP 接口
+
+```text
 POST http://<host>:8000/predict
 Content-Type: application/json
 
@@ -302,8 +325,11 @@ Content-Type: application/json
   "prev_action_bps": 2000000,
   "fallback_action_bps": 2000000
 }
+```
 
-Response:
+响应示例：
+
+```json
 {
   "action_bps": 2500000,
   "raw_action_bps": 2600000,
@@ -320,9 +346,9 @@ Response:
 - HTTP 方式使用进程级共享窗口，适合单路调试或串行请求场景
 - 如果切换到新的会话/新的客户端，建议重启服务，避免沿用上一段会话的历史状态
 
-**WebSocket 接口**：
+##### 4.A.4 WebSocket 接口
 
-```
+```text
 ws://<host>:8000/ws
 ```
 
@@ -330,9 +356,9 @@ ws://<host>:8000/ws
 
 - WebSocket 连接建立后，服务端会为该连接单独维护一份 `10` 步历史窗口
 - 同一连接内连续发送当前一步 `state`，后端会自动滚动更新窗口并推理
-- 多个 WebSocket 客户端之间的历史状态互不影响，更适合在线 A/B Test 场景
+- 多个 WebSocket 客户端之间的历史状态互不影响，更适合在线多客户端场景
 
-#### 4.3 推理输入输出约定
+##### 4.A.5 推理输入输出约定
 
 - 输入状态字段固定为：`send_bps`、`recv_bps`、`rtt_ms`、`loss_rate`、`jitter_ms`
 - 模型真实接收的是服务端维护后的 `50` 维窗口状态：
@@ -343,15 +369,97 @@ ws://<host>:8000/ws
   - `raw_action_bps` 为模型原始输出映射回 bps 后的结果
   - `fallback_used` 表示本次是否触发了 fallback 保护
 
+#### 4.B 浏览器本地 ONNX 推理
+
+推荐在实时 A/B Test 中使用这种方式，把训练好的 Actor 导出为 `ONNX`，然后让每台设备在浏览器端本地推理。
+
+这样做的好处：
+
+- 不需要另一台设备上的远端推理服务
+- 不依赖局域网 RTT，差网络环境下也能实时决策
+- 每个浏览器实例本地维护自己的 `10` 步滑动窗口，不会跨设备串扰
+- 更适合当前 WebRTC 限速这种强实时控制环路
+
+##### 4.B.1 安装前端依赖
+
+在项目根目录执行：
+
+```bash
+npm install
+```
+
+说明：
+
+- 这里会安装 `onnxruntime-web`
+- `ab_test/server_abtest.js` 会自动把 `models/` 和 `onnxruntime-web` 的浏览器运行时脚本作为静态资源暴露出来
+
+##### 4.B.2 导出 ONNX
+
+训练完成后，把某个 checkpoint 的 `actor.pt` 导出为 `actor.onnx`。
+
+示例：
+
+```bash
+python3 tools/export_iql_onnx.py \
+  --model models/iql_cpu/checkpoints/checkpoint_50000/actor.pt \
+  --norm models/iql_cpu/checkpoints/checkpoint_50000/norm.json \
+  --out models/iql_cpu/checkpoints/checkpoint_50000/actor.onnx
+```
+
+说明：
+
+- 导出脚本参考 `Schaferct/code/v14_iql.py` 的 `export2onnx()` 思路实现
+- 默认会对导出的 ONNX 做一次 PyTorch/ONNX 输出一致性校验
+- 如果只是快速导出，可额外加 `--skip-verify`
+
+##### 4.B.3 浏览器本地推理的输入输出
+
+前端本地推理时，浏览器会：
+
+- 从 WebRTC stats 读取当前一步状态：
+  - `send_bps`
+  - `recv_bps`
+  - `rtt_ms`
+  - `loss_rate`
+  - `jitter_ms`
+- 在浏览器端本地维护最近 `10` 步历史窗口
+- 在归一化之前先做一层**轻量在线清洗**
+  - 对 `send_bps`、`recv_bps`、`rtt_ms`、`jitter_ms` 做非负裁剪
+  - 对 `loss_rate` 裁剪到 `[0, 1]`
+  - 对可疑异常零点做抑制，优先用最近有效值/最近短窗口统计值回填
+  - 当连续异常超过短 gap 阈值时，重置本地历史窗口，避免长断点污染状态
+- 再按 `norm.json` 中的配置做固定尺度缩放、截断、展开
+- 本地加载 `actor.onnx` 并推理出动作
+- 在本地调用 `RTCRtpSender.setParameters()` 设置 `maxBitrate`
+
+控制闭环变成：
+
+```text
+本地 WebRTC stats -> 在线清洗 -> 本地滑动窗口 -> 本地 ONNX 推理 -> 本地设置 maxBitrate
+```
+
+整个过程不经过局域网推理请求。
+
+补充说明：
+
+- 这层在线清洗位于 `ab_test/policy_runtime.js`
+- 它的目标是尽量缓解训练阶段 `clean_df()` 与部署阶段实时统计之间的分布差异
+- 它是**因果、轻量、实时版**近似处理，并不是对 `tools/build_rl_dataset.py` 中离线 `clean_df()` 的完全复刻
+- 当前实现优先解决最常见的异常零点问题，尽量在不增加明显浏览器端延迟的前提下提高推理稳定性
+
 ***
 
 ### 步骤 5：A/B 测试验证（GCC vs RL）
 
 对比 GCC 和 RL 限速两种拥塞控制算法的 QoE 差异。
 
-#### 5.1 确保推理服务已启动
+#### 5.1 先确定你要使用哪种推理方式
 
-确认端口 8000 上的 `serve_policy.py` 正在运行。
+- 如果使用 **Python 推理服务**：
+  - 先按 `4.A` 启动 `rl/serve_policy.py`
+- 如果使用 **浏览器本地 ONNX 推理**：
+  - 先按 `4.B` 导出 `actor.onnx`
+  - 确认目标 checkpoint 目录下已经有 `actor.onnx` 和 `norm.json`
 
 #### 5.2 启动 A/B Test 服务（端口 3001）
 
@@ -376,7 +484,30 @@ http://<服务器IP>:3001/ab_test.html
 - **实验组：RL + 限速**：使用 RL 模型决策
 - **随机 (50/50)**：每次连接随机分配（推荐用于 A/B 测试）
 
-#### 5.5 开始采集
+#### 5.5 选择推理方式
+
+页面里现在支持两种推理方式：
+
+- **浏览器本地 ONNX**：推荐，默认选项
+- **远端 HTTP 服务**：兼容旧方案
+
+推荐使用浏览器本地 ONNX 时：
+
+- `推理方式` 选择 `浏览器本地 ONNX`
+- `本地模型` 填写：
+  - `/models/iql_cpu/checkpoints/checkpoint_50000/actor.onnx`
+- `归一化` 填写：
+  - `/models/iql_cpu/checkpoints/checkpoint_50000/norm.json`
+
+默认页面已经预填了上面这组路径。
+
+如果使用远端 HTTP 服务：
+
+- `推理方式` 选择 `远端 HTTP 服务`
+- `推理服务` 填写：
+  - `http://<部署 serve_policy.py 的设备 IP>:8000`
+
+#### 5.6 开始采集
 
 - 选择模式（手动/自动）
 - 选择本地视频文件
@@ -385,7 +516,17 @@ http://<服务器IP>:3001/ab_test.html
 
 #### 输出
 
-CSV 文件保存到：`ab_test_csv/webrtc_abtest_traces_<scenario>_<traceStartTs>.csv`
+CSV 文件会根据推理方式写入不同目录：
+
+- 如果页面选择 **浏览器本地 ONNX**：
+  - `ab_test_onnx_csv/webrtc_abtest_traces_<scenario>_<traceStartTs>.csv`
+- 如果页面选择 **远端 HTTP 服务**：
+  - `ab_test_csv/webrtc_abtest_traces_<scenario>_<traceStartTs>.csv`
+
+说明：
+
+- 两种推理方式使用相同的文件命名规则，区别只在输出目录
+- 这样可以把“浏览器本地推理实验结果”和“远端服务推理实验结果”分开保存，方便后续做 QoE 对比和问题排查
 
 ***
 
@@ -423,10 +564,11 @@ python3 tools/qoe_report.py \
 
 本仓库同时支持两条完全隔离的链路：
 
-| 功能           | 输出目录              | 用途                 |
-| ------------ | ----------------- | ------------------ |
-| **数据集采集**    | `real_video_csv/` | 用于离线 RL 数据集构建与训练   |
-| **A/B Test** | `ab_test_csv/`    | 用于部署模型在线验证与 QoE 对比 |
+| 功能           | 输出目录                | 用途                            |
+| ------------ | ------------------- | ----------------------------- |
+| **数据集采集**    | `real_video_csv/`   | 用于离线 RL 数据集构建与训练              |
+| **A/B Test** | `ab_test_csv/`      | 使用远端 HTTP 推理服务时的在线验证与 QoE 对比  |
+| **A/B Test** | `ab_test_onnx_csv/` | 使用浏览器本地 ONNX 推理时的在线验证与 QoE 对比 |
 
 > 建议：两条链路用不同端口启动不同 Node 服务，避免误写同目录/误读同 CSV。
 
@@ -459,13 +601,16 @@ python3 tools/qoe_report.py \
 ### A/B Test（RL vs GCC）
 
 - AB 分组逻辑：`ab_test/ab_test.js`
-- RL 策略请求：`ab_test/ab_test.js`
+- 浏览器本地推理与在线清洗：`ab_test/policy_runtime.js`
+- 前端限速控制：`ab_test/ab_test.js`
 - CSV 写入：`ab_test/server_abtest.js` 中 `trace_data` 事件处理
 
 ### RL 训练与推理
 
 - IQL 训练：`rl/train_iql.py`
-- 推理服务：`rl/serve_policy.py`（已支持 10 步历史窗口状态推理）
+- ONNX 导出：`tools/export_iql_onnx.py`
+- 浏览器本地推理运行时：`ab_test/policy_runtime.js`
+- Python 推理服务：`rl/serve_policy.py`
 - 数据集生成：`tools/build_rl_dataset.py`
 - QoE 报告：`tools/qoe_report.py`
 
@@ -479,46 +624,5 @@ python3 tools/qoe_report.py \
 | **Critic** | 训练时用于评估动作价值（Q1/Q2/V） | `critics.pt` | ❌ **不需要** |
 
 ***
-
-## 本地一次实际运行
-
-使用 `real_video_csv/` 中当前采集到的 trace，执行：
-
-```bash
-python3 tools/build_rl_dataset.py \
-  --input real_video_csv \
-  --output rl_dataset \
-  --window-size 10 \
-  --format both
-```
-
-这里的 `real_video_csv/` 可以直接是包含多个场景子目录的根目录，脚本会自动递归读取全部 CSV。
-
-实际生成结果：
-
-- transition 数量：`22261`
-- 状态维度：`50`
-- 窗口长度：`10`
-- 状态布局：`feature_major`
-
-训练时使用：
-
-```bash
-python3 -u rl/train_iql.py \
-  --dataset rl_dataset/transitions.npz \
-  --outdir models/iql \
-  --device cpu \
-  --steps 1000 \
-  --batch 64 \
-  --eval-freq 100 \
-  --log-freq 100 \
-  2>&1 | tee training_run.log
-```
-
-本次完成训练后的最佳结果：
-
-- `best_step = 1000`
-- `best_score = 1.544951`
-- 生成产物：`models/iql/actor.pt`、`models/iql/critics.pt`、`models/iql/trainer.pt`、`models/iql/norm.json`、`models/iql/train_config.json`
 
 如需增加：音频轨、循环播放、固定码率/分辨率等能力，可继续扩展。

@@ -1,0 +1,123 @@
+\chapter{WebRTC 采集部署验证平台的设计与实现}
+\label{chap:platform}
+
+在离线强化学习（Offline RL）与网络系统交叉融合的研究范式中，一个具备高保真度、强可控性与闭环验证能力的底层实验平台是支撑算法理论走向工程落地的核心基础设施。本章将详细论述本文所构建的 WebRTC 采集部署验证平台的总体设计哲学、模块化架构解剖、核心运行链路的工程实现细节，并从系统工程的视角评估该平台的科研价值与未来演进方向。
+
+\section{平台总体设计理念与架构抽象}
+\label{sec:design-philosophy}
+
+现有的 RTC 拥塞控制研究普遍受困于"在线探索风险高"与"纯仿真环境失真大"的二元悖论。为打破这一僵局，本文平台在设计之初即确立了"真实物理信道承载、端到端数据闭环、采集与评测严格物理隔离"的三大核心理念。
+
+\subsection{模块化解耦与物理目录隔离设计}
+\label{subsec:module-isolation}
+
+整个验证平台在架构上被抽象为一条从数据生产、模型孵化到在线对抗的流水线（Pipeline）。为了避免数据读写冲突与实验基准污染，平台在 Node.js 服务层与本地文件系统层实现了深度的物理隔离。系统源码严格划分为四大核心组件簇：
+
+\begin{enumerate}
+\item \textbf{轨迹采集簇}（\texttt{trace\_collection/}）：专职负责在基线策略（GCC）控制下，高频采集真实物理链路中的底层网络动力学特征，产出原始会话日志（存放于 \texttt{real\_video\_csv/}）。
+
+\item \textbf{算法孵化簇}（\texttt{rl/} 与 \texttt{tools/}）：涵盖了从原始 CSV 日志到强化学习标准四元组（Transitions）的特征工程清洗（\texttt{build\_rl\_dataset.py}），以及基于隐式 Q 学习（IQL）的深度策略网络训练（\texttt{train\_iql.py}）与计算图导出（\texttt{export\_iql\_onnx.py}）流水线。
+
+\item \textbf{在线对抗簇}（\texttt{ab\_test/}）：负责加载离线训练产出的模型工件（Artifacts），在相同的信道背景下，通过前端注入实施强化学习策略与原生 GCC 算法的 A/B 对抗测试，生成对比评估轨迹（分流至 \texttt{ab\_test\_csv/} 或 \texttt{ab\_test\_onnx\_csv/}）。
+
+\item \textbf{信道控制簇}（自动化脚本）：利用 \texttt{auto\_collect\_mac.sh} 等 Shell 脚本，调用宿主机操作系统的底层流量控制工具（如 macOS 下的 \texttt{dnctl}/\texttt{pfctl} 或 Linux 下的 \texttt{tc}），实现网络瓶颈带宽、RTT 延迟与随机抖动的自动化场景轮询。
+\end{enumerate}
+
+\subsection{平台架构的拓扑关系}
+\label{subsec:architecture-topology}
+
+平台的端到端架构拓扑可映射为一个典型的"感知-决策-反馈"控制论环路。在 Web 客户端侧，浏览器内置的 WebRTC 引擎（MediaStream、RTCPeerConnection、RTCRtpSender）承担了媒体数据流的捕获、编码与网络传输任务。控制平面则通过劫持 \texttt{getStats()} API 获取实时链路状态，将其送入策略仲裁中心（本地 ONNX 运行时或远端 Python 推理集群），仲裁中心输出的目标码率指令最终反向注入 RTCRtpSender 的 \texttt{maxBitrate} 寄存器，从而闭合拥塞控制环路。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\textwidth]{figures/platform_architecture.pdf}
+\caption{WebRTC 采集部署验证平台架构拓扑图}
+\label{fig:platform-architecture}
+\end{figure}
+
+\section{数据采集链路的设计与实现}
+\label{sec:collection-pipeline}
+
+数据采集链路（Trace Collection Pipeline）的工程使命，是为离线强化学习提供具备极高物理逼真度与统计学代表性的基础行为数据集（Behavior Dataset）。
+
+\subsection{媒体流接管与信令协商}
+\label{subsec:media-signaling}
+
+在 \texttt{trace\_collection/main.js} 的前端实现中，发送端通过 HTML5 File API 加载本地标准化测试视频文件，利用 \texttt{captureStream()} 方法将其强制剥离为离散的 MediaStream 轨道。这种剥离本地摄像头的硬性媒体源注入设计，确保了在多轮次实验中视频内容（如空间复杂度、时域运动剧烈程度）的一致性，从而排除了信源波动对带宽估计的干扰。
+
+在信令握手层面，客户端通过建立与 \texttt{trace\_collection/server.js}（默认监听于 3000 端口）的 WebSocket 长连接，完成基于 SDP（Session Description Protocol）的能力协商与 ICE（Interactive Connectivity Establishment）候选者交换。此过程刻意不干预浏览器默认的编解码器（如 VP8）层级配置，以最大限度保留原生 WebRTC 拥塞控制模块的初始动力学边界。
+
+\subsection{高分辨率状态感知与特征序列化}
+\label{subsec:state-sensing}
+
+当媒体通道确立后，采集服务即刻启动基于定时器驱动的高分辨率状态轮询机制（\texttt{startDataCollection()}）。为了精确捕获无线信道的瞬态变迁，轮询周期被压榨至数十毫秒级别。探针代码深入 \texttt{getStats()} 返回的异步字典，精准剥离出以下决定网络拥塞演化的核心特征量：
+
+\begin{itemize}
+\item 基于 \texttt{bytesSent} 与 \texttt{bytesReceived} 差分计算的物理层发送/接收吞吐量；
+\item 提取自 \texttt{candidate-pair} 的底层物理往返时延（RTT）；
+\item 源于 \texttt{inbound-rtp} 的接收端计算抖动（Jitter）；
+\item 基于序列号连续性统计的丢包率（Loss Rate）；
+\item 以及由原生 GCC 算法输出的预测带宽（Estimated Bandwidth）。
+\end{itemize}
+
+上述时序特征被严格序列化，并经由 WebSocket 信道实时回传至 Node.js 服务端，最终以 \texttt{webrtc\_network\_traces\_<scenario>\_<traceStartTs>.csv} 的格式落盘。其中，\texttt{<scenario>} 标签由系统底层的自动化网络控制脚本动态注入，确保每一条轨迹均能精准溯源至对应的物理信道配置（如 \texttt{3g}、\texttt{dsl} 或 \texttt{fluctuating}）。
+
+\section{A/B 测试对抗链路的设计与实现}
+\label{sec:abtest-pipeline}
+
+A/B 测试链路（A/B Test Pipeline）是检验离线强化学习策略泛化能力与鲁棒性的最终试金石。该链路在复用基础媒体传输框架的同时，对控制平面的路由逻辑进行了深度重构。
+
+\subsection{动态控制流路由与双轨评估架构}
+\label{subsec:dynamic-routing}
+
+在 \texttt{ab\_test/ab\_test.js} 的初始化阶段，系统引入了动态分组仲裁机制，将新建立的 WebRTC 会话随机或强制分配至"对照组（GCC）"或"实验组（RL 限速）"。
+
+当会话被路由至对照组时，控制流完全旁路自定义的限速模块，任由浏览器底层的 GCC 状态机接管码率调度；而当会话命入实验组时，系统将主动劫持带宽调节权限，高频触发 \texttt{policy\_runtime.js} 中的推理管线。这种在同一物理节点、同一信令体系下实现的控制流热切换，从实验设计的根源上消除了环境异构性引入的评估偏差。
+
+\subsection{异构推理引擎的兼容与集成}
+\label{subsec:inference-engines}
+
+为了适应从实验室孵化到边缘终端部署的不同工程阶段，A/B 测试链路在架构上解耦了模型推理层，提供了两种异构的计算后端方案：
+
+\subsubsection{远端 Python HTTP/WebSocket 推理（方案 A）}
+
+该方案将策略推理进程独立部署为服务端守护程序（\texttt{rl/serve\_policy.py}），通过 HTTP REST 接口或 WebSocket 长连接对外暴露推理 API。前端探针在每一个采样周期（约数十毫秒）将当前单步的 \texttt{send\_bps}、\texttt{recv\_bps}、\texttt{rtt\_ms}、\texttt{loss\_rate}、\texttt{jitter\_ms} 等原始观测打包为 JSON 报文，跨进程或跨主机发送至 Python 推理服务。服务端在内存中为每个 HTTP 请求或 WebSocket 连接独立维护一份长度为 10 的张量滑动窗口，调用 PyTorch 运行时完成 GaussianPolicy 的前向传播，并将输出的目标码率（经过限幅、平滑与 fallback 保护）回写至前端。
+
+\subsubsection{浏览器本地 ONNX 边缘推理（方案 B）}
+
+该方案将训练得到的 PyTorch 模型经由 \texttt{tools/export\_iql\_onnx.py} 导出为平台无关的 ONNX 计算图，并通过 \texttt{onnxruntime-web} 以 WebAssembly（Wasm）或 WebGPU 运行时直接加载至浏览器沙盒中。\texttt{ab\_test/policy\_runtime.js} 在每个采样周期内直接读取本地 \texttt{getStats()} 返回的状态量，经过因果特征清洗与归一化后组装为 50 维张量，送入本地 ONNX 引擎完成前向传播；推理输出经限幅与平滑处理后，直接驱动 \texttt{RTCRtpSender.setParameters()} 完成码率下发。整个控制回路完全闭合于浏览器进程内部，不存在任何跨进程或跨主机的通信开销。
+
+\subsection{因果轻量级在线特征清洗}
+\label{subsec:online-cleaning}
+
+鉴于在线真实系统与离线历史数据集之间存在不可避免的分布微小偏移（Distributional Shift），\texttt{policy\_runtime.js} 在输入张量送入 ONNX 引擎前，嵌入了一层因果性（Causal）的轻量级特征清洗流水线。
+
+区别于 \texttt{tools/build\_rl\_dataset.py} 中依赖全局未来信息的离线清洗，在线清洗必须严格遵守时间因果律。算法通过维护一个短时效的微观记忆队列，对 \texttt{getStats()} 偶尔抛出的异常零点（Zero-value Glitches）实施基于最近有效值的零阶保持（Zero-order Hold）补偿；同时，当检测到持续超越阈值的长断点时，系统会主动重置本地的历史滑动窗口，防止陈旧的失效状态污染后续的自回归推理。
+
+\section{平台的系统工程意义与扩展展望}
+\label{sec:engineering-significance}
+
+本文构建的 WebRTC 采集部署验证平台，不仅是完成毕业设计算法验证的工具容器，更在计算机网络系统与人工智能交叉领域展现出独特的系统工程价值。
+
+\subsection{端到端闭环验证的学术价值}
+\label{subsec:academic-value}
+
+长久以来，网络拥塞控制的强化学习研究饱受"仿真失真"的诟病。本平台通过深度调用 WebRTC 原生 API 与操作系统底层流量整形工具，成功将基于 IQL 的离线策略训练锚定于真实的物理链路之上。它证明了：通过合理的架构设计，完全可以利用廉价的终端设备构建出支撑复杂时序决策模型从数据采集、清洗、训练到零距离部署对抗的完整"Real-to-Real"闭环。这为后续脱离昂贵硬件仿真仪、开展大规模众包式网络控制策略研究提供了一种轻量级范式。
+
+\subsection{未来架构演进与扩展方向}
+\label{subsec:future-extensions}
+
+尽管平台已具备了扎实的闭环验证能力，但在面向工业级生产环境的演进路径上，仍存在广阔的扩展空间：
+
+\begin{enumerate}
+\item \textbf{多模态特征融合机制}：当前的观测状态仅局限于传输层的底层网络度量。未来可考虑将应用层的媒体特征（如视频帧的量化参数 QP、关键帧 I-Frame 的编码大小、甚至音频轨道的静音检测信号）一并序列化并融合至状态张量中。这将赋予模型跨层（Cross-layer）感知的联合优化能力。
+
+\item \textbf{联邦学习与边缘更新框架}：随着本地 ONNX 推理架构的成熟，可进一步引入联邦学习（Federated Learning）机制。各个终端节点在本地运行策略并收集 QoE 奖励反馈，周期性地向云端聚合服务器提交轻量级的参数梯度，从而在不侵犯用户隐私的前提下，实现拥塞控制模型的持续在线微调（Online Fine-tuning）。
+
+\item \textbf{基于 eBPF 的内核级劫持}：目前平台对网络特征的感知受限于浏览器暴露的 \texttt{getStats} 接口周期。为追求更极致的响应极限，未来可探索利用 Linux eBPF（Extended Berkeley Packet Filter）技术，直接在内核协议栈层面挂载探针，实现微秒级的数据包级状态截获与决策下发。
+\end{enumerate}
+
+\section{本章小结}
+\label{sec:chapter3-summary}
+
+本章完整论述了 WebRTC 采集部署验证平台的设计理念与工程实现。平台以"真实物理信道承载、端到端数据闭环、采集与评测严格物理隔离"为核心设计准则，在架构层面划分为轨迹采集簇、算法孵化簇、在线对抗簇与信道控制簇四大组件，通过独立端口与物理目录隔离，杜绝了数据采集阶段与 A/B 测试阶段之间的交叉污染。在数据采集链路中，平台利用 \texttt{captureStream()} 接口实现了可控、一致的媒体源注入，通过高分辨率 \texttt{getStats()} 轮询提取出 RTT、抖动、丢包率、收发吞吐量及 GCC 预估带宽等核心时序特征，并将完整轨迹以带有场景标签的 CSV 格式持久化落盘。在 A/B 测试链路中，平台引入了动态控制流路由机制，在相同信令体系下实现 GCC 对照组与 RL 实验组的热切换，消除了环境异构引入的评估偏差；同时，通过兼容远端 Python HTTP/WebSocket 推理与浏览器本地 ONNX 边缘推理两种异构计算后端，为不同工程阶段提供了灵活的部署选项。此外，因果轻量级在线特征清洗模块的嵌入，有效缓解了在线部署环境与离线训练数据之间的分布微偏移。该平台的成功构建，为后续离线强化学习数据集的高质量生成与算法效果的严格对比验证奠定了坚实的工程基础。

@@ -17,7 +17,13 @@ const scenarioSelect = document.getElementById('scenarioSelect');
 const modeRadios = document.querySelectorAll('input[name="collectMode"]');
 
 const enablePolicyEl = document.getElementById('enablePolicy');
+const policyModeEl = document.getElementById('policyMode');
+const policyModelUrlEl = document.getElementById('policyModelUrl');
+const policyNormUrlEl = document.getElementById('policyNormUrl');
 const policyServerUrlEl = document.getElementById('policyServerUrl');
+const localPolicyConfigRowEl = document.getElementById('localPolicyConfigRow');
+const remotePolicyConfigRowEl = document.getElementById('remotePolicyConfigRow');
+const policyStatusEl = document.getElementById('policyStatus');
 const appliedMaxBitrateEl = document.getElementById('appliedMaxBitrate');
 const abModeEl = document.getElementById('abMode');
 const abGroupDisplayEl = document.getElementById('abGroupDisplay');
@@ -33,6 +39,8 @@ let appliedMaxBitrateBps = null;
 let lastPolicyActionBps = null;
 let lastPolicyRequestAt = 0;
 let policyInFlight = false;
+let policyRuntime = null;
+let policyRuntimePromise = null;
 
 let collectMode = 'manual';
 let activeScenario = scenarioSelect.value;
@@ -42,6 +50,18 @@ let desiredRoomId = 'default-room';
 let currentRoomId = '';
 let roomJoined = false;
 let roomPeerCount = 0;
+
+if (policyModeEl && !policyModeEl.value) {
+    policyModeEl.value = 'local';
+}
+
+if (policyModelUrlEl && !policyModelUrlEl.value) {
+    policyModelUrlEl.value = '/models/iql_cpu/checkpoints/checkpoint_50000/actor.onnx';
+}
+
+if (policyNormUrlEl && !policyNormUrlEl.value) {
+    policyNormUrlEl.value = '/models/iql_cpu/checkpoints/checkpoint_50000/norm.json';
+}
 
 if (policyServerUrlEl && !policyServerUrlEl.value) {
     const host = window.location.hostname || '127.0.0.1';
@@ -68,6 +88,23 @@ function setRoomStatus(text, isError = false) {
     if (!roomStatusEl) return;
     roomStatusEl.textContent = text;
     roomStatusEl.style.color = isError ? '#b00020' : '#0b6b2a';
+}
+
+function setPolicyStatus(text, isError = false) {
+    if (!policyStatusEl) return;
+    policyStatusEl.textContent = text;
+    policyStatusEl.style.color = isError ? '#b00020' : '#0b6b2a';
+}
+
+function getPolicyMode() {
+    const mode = String(policyModeEl && policyModeEl.value || 'local').toLowerCase();
+    return mode === 'remote' ? 'remote' : 'local';
+}
+
+function updatePolicyConfigUi() {
+    const mode = getPolicyMode();
+    if (localPolicyConfigRowEl) localPolicyConfigRowEl.style.display = mode === 'local' ? '' : 'none';
+    if (remotePolicyConfigRowEl) remotePolicyConfigRowEl.style.display = mode === 'remote' ? '' : 'none';
 }
 
 function updateRoomStatus() {
@@ -122,6 +159,49 @@ function getPolicyServerBaseUrl() {
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 }
 
+function getLocalPolicyConfig() {
+    return {
+        modelUrl: String(policyModelUrlEl && policyModelUrlEl.value || '').trim(),
+        normUrl: String(policyNormUrlEl && policyNormUrlEl.value || '').trim(),
+    };
+}
+
+async function ensureLocalPolicyRuntime() {
+    if (policyRuntime) return policyRuntime;
+    if (policyRuntimePromise) return policyRuntimePromise;
+
+    const cfg = getLocalPolicyConfig();
+    if (!cfg.modelUrl || !cfg.normUrl) {
+        throw new Error('empty local policy model/norm url');
+    }
+
+    setPolicyStatus('正在加载本地 ONNX 模型...');
+    policyRuntimePromise = window.BrowserPolicyRuntime.create(cfg)
+        .then((runtime) => {
+            policyRuntime = runtime;
+            setPolicyStatus('本地 ONNX 已加载');
+            return runtime;
+        })
+        .catch((err) => {
+            policyRuntime = null;
+            setPolicyStatus(`本地模型加载失败: ${err.message || err}`, true);
+            throw err;
+        })
+        .finally(() => {
+            policyRuntimePromise = null;
+        });
+
+    return policyRuntimePromise;
+}
+
+function invalidateLocalPolicyRuntime() {
+    policyRuntime = null;
+    policyRuntimePromise = null;
+    if (getPolicyMode() === 'local') {
+        setPolicyStatus('本地模型未加载');
+    }
+}
+
 socket.on('connect', () => {
     joinRoom(desiredRoomId);
 });
@@ -172,6 +252,7 @@ function beginNewTraceSegment({ scenario, traceStartTs }) {
     activeScenario = scenario || scenarioSelect.value || 'baseline';
     activeTraceStartTs = traceStartTs || Date.now();
     resetRateCounters();
+    resetPolicyState();
 }
 
 function setCollectMode(mode) {
@@ -190,6 +271,13 @@ function setAppliedMaxBitrateText(bps) {
         return;
     }
     appliedMaxBitrateEl.textContent = String(Math.round(bps / 1000));
+}
+
+function resetPolicyState() {
+    lastPolicyActionBps = null;
+    if (policyRuntime && typeof policyRuntime.reset === 'function') {
+        policyRuntime.reset();
+    }
 }
 
 function clampMaxBitrateBps(bps) {
@@ -213,7 +301,7 @@ async function applyMaxBitrate(sender, maxBitrateBps) {
             console.warn('clear maxBitrate failed:', err);
         }
         appliedMaxBitrateBps = null;
-        lastPolicyActionBps = null;
+        resetPolicyState();
         setAppliedMaxBitrateText(null);
         return;
     }
@@ -232,6 +320,14 @@ async function applyMaxBitrate(sender, maxBitrateBps) {
 }
 
 async function requestPolicyAction({ state, prevActionBps, fallbackActionBps }) {
+    if (getPolicyMode() === 'local') {
+        const runtime = await ensureLocalPolicyRuntime();
+        const out = await runtime.predict({ state, prevActionBps, fallbackActionBps });
+        const action = Number(out && out.action_bps);
+        if (!Number.isFinite(action)) throw new Error('invalid local policy response');
+        return action;
+    }
+
     const baseUrl = getPolicyServerBaseUrl();
     if (!baseUrl) throw new Error('empty policy server url');
 
@@ -274,6 +370,32 @@ scenarioSelect.addEventListener('change', () => {
 if (joinRoomBtnEl) {
     joinRoomBtnEl.addEventListener('click', () => {
         joinRoom(roomIdInputEl ? roomIdInputEl.value : desiredRoomId);
+    });
+}
+
+if (policyModeEl) {
+    policyModeEl.addEventListener('change', () => {
+        updatePolicyConfigUi();
+        resetPolicyState();
+        if (getPolicyMode() === 'remote') {
+            setPolicyStatus('当前使用远端 HTTP 推理');
+        } else {
+            invalidateLocalPolicyRuntime();
+        }
+    });
+}
+
+if (policyModelUrlEl) {
+    policyModelUrlEl.addEventListener('change', () => {
+        invalidateLocalPolicyRuntime();
+        resetPolicyState();
+    });
+}
+
+if (policyNormUrlEl) {
+    policyNormUrlEl.addEventListener('change', () => {
+        invalidateLocalPolicyRuntime();
+        resetPolicyState();
     });
 }
 
@@ -394,6 +516,11 @@ document.getElementById('callBtn').onclick = async () => {
     originalAbMode = abMode;
     const chosenAbGroup = abMode === 'random' ? (Math.random() < 0.5 ? 'gcc' : 'rl') : normalizeAbGroup(abMode);
     setAbGroup(chosenAbGroup);
+    if (chosenAbGroup === 'rl' && getPolicyMode() === 'local') {
+        ensureLocalPolicyRuntime().catch((err) => {
+            console.warn('load local policy failed:', err);
+        });
+    }
 
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
@@ -467,7 +594,9 @@ function startDataCollection() {
             const now = Date.now();
 
             if (appliedMaxBitrateBps != null) {
-                trace.estimatedBw = appliedMaxBitrateBps;
+                trace.estimatedBw = appliedMaxBitrateBps < gccEstimatedBw
+                    ? appliedMaxBitrateBps
+                    : gccEstimatedBw;
             }
 
             const shouldRequest =
@@ -506,6 +635,7 @@ function startDataCollection() {
                 appliedMaxBitrateBps = null;
                 setAppliedMaxBitrateText(null);
             }
+            resetPolicyState();
         }
 
         trace.policyMaxBitrateBps = appliedMaxBitrateBps || 0;
@@ -515,8 +645,16 @@ function startDataCollection() {
         trace.traceStartTs = activeTraceStartTs;
         trace.sessionId = sessionId.toString();
         trace.roomId = currentRoomId;
+        trace.policyMode = getPolicyMode();
 
         socket.emit('ab_trace_data', trace);
 
     }, 500);
+}
+
+updatePolicyConfigUi();
+if (getPolicyMode() === 'remote') {
+    setPolicyStatus('当前使用远端 HTTP 推理');
+} else {
+    setPolicyStatus('本地模型未加载');
 }
