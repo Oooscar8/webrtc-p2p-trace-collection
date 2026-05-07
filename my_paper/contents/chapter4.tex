@@ -19,35 +19,65 @@
 
 表\ref{tab:network-profiles-9}给出了本文采用的 9 类网络环境参数化设计。所有场景标签（\texttt{baseline}、\texttt{3g}、\texttt{lte} 等）不仅用于数据集采集阶段的 CSV 标注，也在后续的 A/B 测试阶段作为统一的“实验条件”标识，从而实现\textbf{采集数据分桶}与\textbf{线上评测分桶}的一致性：在相同的 \texttt{scenario} 下，对照组（原生 GCC）与实验组（RL 限速策略）的 QoE 表现可以直接进行横向对比。
 
-\begin{table}[htbp]
+\begin{figure}[htbp]
     \centering
-    \small
-    \begin{tabular}{|l|c|c|c|p{6.2cm}|}
-        \hline
-        场景标签 & 带宽（bw） & 延迟（delay） & 丢包率（plr） & 设计目的/对应评测维度 \\
-        \hline
-        \texttt{baseline} & 1000 Mbit/s & 0 ms & 0\% & 理想链路基线，用于验证采集链路与模型在高质量网络下的上界表现 \\
-        \hline
-        \texttt{3g} & 555 Kbit/s & 100 ms & 0\% & 低带宽 + 中等时延的蜂窝弱网，考察策略在吞吐受限条件下的保守性与稳定性 \\
-        \hline
-        \texttt{lte} & 30 Mbit/s & 58 ms & 0\% & 高容量蜂窝网络，带宽充裕但 RTT 偏高，考察延迟约束下的码率选择 \\
-        \hline
-        \texttt{dsl} & 1128 Kbit/s & 5 ms & 0\% & 近似“带宽不对称”的接入链路抽象（脚本中以统一瓶颈带宽近似），用于覆盖低带宽但低 RTT 的典型宽带场景 \\
-        \hline
-        \texttt{low\_bw} & 500 Kbit/s & 0 ms & 0\% & 极低稳定带宽上限，考察策略在持续瓶颈下的目标码率收敛行为 \\
-        \hline
-        \texttt{high\_loss} & 10 Mbit/s & 0 ms & 5\% & 中等带宽下的持续随机丢包，考察策略对非拥塞性丢包噪声的鲁棒性 \\
-        \hline
-        \texttt{high\_delay} & 5 Mbit/s & 150 ms & 0\% & 中等带宽下的高 RTT，考察策略对排队/传播时延惩罚项的响应 \\
-        \hline
-        \texttt{fluctuating} & 多阶段时变 & 多阶段时变 & 多阶段时变 & 在单个 5 分钟窗口内按预设时间表进行阶梯式切换（带宽 20M→3M→800K→50M→100K→…），用于模拟非平稳网络与突发事件 \\
-        \hline
-        \texttt{very\_bad} & 1 Mbit/s & 500 ms & 10\% & 极端弱网（低带宽 + 超高 RTT + 高丢包），用于压力测试与策略失效边界分析 \\
-        \hline
-    \end{tabular}
-    \caption{自动采集模式的 9 类网络环境配置（与后续 A/B 测试场景标签保持一致）}
-    \label{tab:network-profiles-9}
-\end{table}
+    % 第一排：baseline / 3g / fluctuating
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/baseline_trace_8038.png}
+        \caption{baseline 场景}
+    \end{minipage}\hfill
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/3g_trace_7621.png}
+        \caption{3g 场景}
+    \end{minipage}\hfill
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/fluctuating_trace_7180.png}
+        \caption{fluctuating 场景}
+    \end{minipage}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    % 第二排：dsl / high_delay / high_loss
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/dsl_trace_7463.png}
+        \caption{dsl 场景}
+    \end{minipage}\hfill
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/high_delay_trace_7689.png}
+        \caption{high delay 场景}
+    \end{minipage}\hfill
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/high_loss_trace_7461.png}
+        \caption{high loss 场景}
+    \end{minipage}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    % 第三排：low_bw / lte / very_bad
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/low_bw_trace_7802.png}
+        \caption{low bandwidth 场景}
+    \end{minipage}\hfill
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/lte_trace_7870.png}
+        \caption{lte 场景}
+    \end{minipage}\hfill
+    \begin{minipage}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/traces/very_bad_trace_7552.png}
+        \caption{very bad 场景}
+    \end{minipage}
+\end{figure}
 
 需要强调的是，以上配置并非为了“仿真网络”，而是为了在真实 WebRTC 协议栈上构造一组可控、可复现且覆盖典型劣化维度（带宽、时延、丢包、非平稳波动）的物理信道条件，以获得具有代表性的 GCC 行为数据集。本文将在后文“采集数据的质量验证与可视化分析”小节中，对各场景下采集到的原始网络轨迹进行系统的可视化审查与统计分析，验证数据的物理一致性以及采集/清洗链路的端到端有效性。
 
