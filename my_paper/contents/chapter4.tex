@@ -1,3 +1,56 @@
+\chapter{离线强化学习训练数据集的采集和构建}
+
+\section{专家策略下的原始网络数据轨迹采集}
+\label{sec:expert-trace-collection}
+
+离线强化学习的训练数据集必须由一个安全且工程上可用的行为策略（behavior policy）生成。对于 WebRTC 拥塞控制任务，本文选择浏览器默认的 Google Congestion Control（GCC）作为“专家策略”\(\pi_E\)，并在该策略控制下采集真实网络环境中的状态—动作轨迹。一方面，GCC 作为业界主流的启发式拥塞控制算法，已在大规模生产系统中被长期验证，能够在多数网络条件下提供稳定的基线体验；另一方面，以 GCC 作为行为策略采集数据，天然满足离线强化学习的“保守性”前提：训练数据覆盖的动作分布与后续部署时的可行动作空间高度一致，从而降低分布外动作（OOD action）导致的价值外推风险。
+
+\subsection{采集链路与轨迹落盘格式}
+
+采集链路由“浏览器前端探针 + Node.js 服务端落盘”两部分构成。两台终端设备（Peer A/B）同时打开采集页面，加载同一段本地视频文件以保证信源一致性，仅由一侧发起 WebRTC 连接并启动采集。
+
+在会话建立后，前端以 500ms 周期调用 \texttt{RTCPeerConnection.getStats()}，从 \texttt{candidate-pair}、\texttt{inbound-rtp} 与 \texttt{outbound-rtp} 等统计项中提取 RTT、抖动、丢包率、收发吞吐量等网络状态特征，同时读取 GCC 输出的可用带宽估计值 \texttt{availableOutgoingBitrate} 作为动作信号。每个采样点被序列化为一条结构化记录，经 WebSocket 发送至服务端，并追加写入 CSV 文件。单条记录包含 \texttt{timestamp}、\texttt{clientId}（用以区分双端）以及 \texttt{rtt\_ms}、\texttt{jitter}、\texttt{loss\_rate}、\texttt{recv\_bps}、\texttt{send\_bps}、\texttt{estimated\_bw\_bps} 等核心字段。
+
+在文件组织上，服务端按照 \texttt{webrtc\_network\_traces\_<scenario>\_<traceStartTs>.csv} 的命名规范落盘，其中 \texttt{scenario} 为网络环境标签，\texttt{traceStartTs} 为一次采集片段（trace segment）的起始时间戳（ms）。这种“场景标签 + 片段时间戳”的双键设计，使得自动化场景轮询下的不同网络条件能够被严格隔离为独立轨迹段，便于后续清洗、切段与统计审计。
+
+\subsection{自动采集模式与九类网络环境设计（对齐 A/B 测试）}
+
+自动采集模式下，采集服务在建立连接时自动拉起 \texttt{auto\_collect\_mac.sh}，通过 macOS 的 \texttt{dnctl}/\texttt{pfctl}（dummynet）对宿主机所有入/出方向流量施加整形规则。脚本默认以 \texttt{INTERVAL\_SECONDS=300} 轮询 9 类网络环境，并在每次切换时生成新的 \texttt{traceStartTs}，再通过 \texttt{POST /auto/network} 将 \texttt{(scenario, traceStartTs)} 广播到前端；前端收到通知后重置速率计数器并开启新的 trace segment，从而保证每个片段内部的网络参数在统计意义上近似平稳。
+
+表\ref{tab:network-profiles-9}给出了本文采用的 9 类网络环境参数化设计。所有场景标签（\texttt{baseline}、\texttt{3g}、\texttt{lte} 等）不仅用于数据集采集阶段的 CSV 标注，也在后续的 A/B 测试阶段作为统一的“实验条件”标识，从而实现\textbf{采集数据分桶}与\textbf{线上评测分桶}的一致性：在相同的 \texttt{scenario} 下，对照组（原生 GCC）与实验组（RL 限速策略）的 QoE 表现可以直接进行横向对比。
+
+\begin{table}[htbp]
+    \centering
+    \small
+    \begin{tabular}{|l|c|c|c|p{6.2cm}|}
+        \hline
+        场景标签 & 带宽（bw） & 延迟（delay） & 丢包率（plr） & 设计目的/对应评测维度 \\
+        \hline
+        \texttt{baseline} & 1000 Mbit/s & 0 ms & 0\% & 理想链路基线，用于验证采集链路与模型在高质量网络下的上界表现 \\
+        \hline
+        \texttt{3g} & 555 Kbit/s & 100 ms & 0\% & 低带宽 + 中等时延的蜂窝弱网，考察策略在吞吐受限条件下的保守性与稳定性 \\
+        \hline
+        \texttt{lte} & 30 Mbit/s & 58 ms & 0\% & 高容量蜂窝网络，带宽充裕但 RTT 偏高，考察延迟约束下的码率选择 \\
+        \hline
+        \texttt{dsl} & 1128 Kbit/s & 5 ms & 0\% & 近似“带宽不对称”的接入链路抽象（脚本中以统一瓶颈带宽近似），用于覆盖低带宽但低 RTT 的典型宽带场景 \\
+        \hline
+        \texttt{low\_bw} & 500 Kbit/s & 0 ms & 0\% & 极低稳定带宽上限，考察策略在持续瓶颈下的目标码率收敛行为 \\
+        \hline
+        \texttt{high\_loss} & 10 Mbit/s & 0 ms & 5\% & 中等带宽下的持续随机丢包，考察策略对非拥塞性丢包噪声的鲁棒性 \\
+        \hline
+        \texttt{high\_delay} & 5 Mbit/s & 150 ms & 0\% & 中等带宽下的高 RTT，考察策略对排队/传播时延惩罚项的响应 \\
+        \hline
+        \texttt{fluctuating} & 多阶段时变 & 多阶段时变 & 多阶段时变 & 在单个 5 分钟窗口内按预设时间表进行阶梯式切换（带宽 20M→3M→800K→50M→100K→…），用于模拟非平稳网络与突发事件 \\
+        \hline
+        \texttt{very\_bad} & 1 Mbit/s & 500 ms & 10\% & 极端弱网（低带宽 + 超高 RTT + 高丢包），用于压力测试与策略失效边界分析 \\
+        \hline
+    \end{tabular}
+    \caption{自动采集模式的 9 类网络环境配置（与后续 A/B 测试场景标签保持一致）}
+    \label{tab:network-profiles-9}
+\end{table}
+
+需要强调的是，以上配置并非为了“仿真网络”，而是为了在真实 WebRTC 协议栈上构造一组可控、可复现且覆盖典型劣化维度（带宽、时延、丢包、非平稳波动）的物理信道条件，以获得具有代表性的 GCC 行为数据集。本文将在后文“采集数据的质量验证与可视化分析”小节中，对各场景下采集到的原始网络轨迹进行系统的可视化审查与统计分析，验证数据的物理一致性以及采集/清洗链路的端到端有效性。
+
 \section{数据集构建的整体流程概述}
 
 离线强化学习区别于在线学习的核心特征在于，策略训练完全依赖于预先收集的静态数据集，而不再与环境进行交互式采样。这一范式对训练数据集的质量提出了极高的要求：数据中的状态分布、动作覆盖范围以及奖励信号的可靠性，直接决定了学得策略的性能上限。对于本研究所面向的 WebRTC 视频通话拥塞控制任务而言，数据集构建面临的挑战更为复杂——原始采集数据来源于真实物理网络环境下的浏览器 getStats API 周期性轮询，存在采样空洞、传感器零点漂移、多客户端时序交织以及网络场景切换导致的轨迹断裂等问题，这些均需要在进入训练管线之前得到妥善处理。
