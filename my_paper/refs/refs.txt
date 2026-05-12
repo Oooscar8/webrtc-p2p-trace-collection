@@ -20,20 +20,26 @@
 [18] Aviral Kumar, Aurick Zhou, George Tucker, and Sergey Levine. 2020. Conservative Q-Learning for Offline Reinforcement Learning. arXiv:2006.04779 [cs.LG]
 [19] P. Pinyoanuntapong, T. Pothuneedi, R. Balakrishnan, M. Lee, C. Chen, and P. Wang, “Sim-to-Real Transfer in Multi-agent Reinforcement Networking for Federated Edge Computing,” in Proc. IEEE/ACM Symp. Edge Comput. (SEC), Dec. 2021, pp. 355–360.
 [20] S. Hemminger, “Network Emulation with NetEm,” in Proc. 6th Australian National Linux Conf. (LCA), Apr. 2005, pp. 1–9.
-[21] Learning to Optimize Low-Latency Live Streaming from Expertise: An Offline Meta-Reinforcement Learning Approach
-[22] 
-[23] 
-[24] 
-[25]
-[26]
-[27]
-[28]
-[29]
-[30]
+[21] Y. Du, N. Kan, C. Li, J. Zou, Z. Zheng, S. Li, W. Dai, Q. Li, and H. Xiong, "Learning to Optimize Low-Latency Live Streaming from Expertise: An Offline Meta-Reinforcement Learning Approach," in Proc. 2025 Int. Conf. Visual Communications and Image Processing (VCIP), 2025.
+[22] H. Schulzrinne, S. Casner, R. Frederick, and V. Jacobson, "RTP: A Transport Protocol for Real-Time Applications," IETF RFC 3550, 2003.
+[23] Z. Sarker, C. Perkins, V. Singh, and M. Ramalho, "RTP Control Protocol (RTCP) Feedback for Congestion Control," IETF RFC 8888, 2021.
+[24] A. Keranen, C. Holmberg, and J. Rosenberg, "Interactive Connectivity Establishment (ICE): A Protocol for Network Address Translator (NAT) Traversal," IETF RFC 8445, 2018.
+[25] V. Jacobson, "Congestion Avoidance and Control," in Proc. ACM SIGCOMM, 1988, pp. 314–329.
+[26] S. Ha, I. Rhee, and L. Xu, "CUBIC: A New TCP-Friendly High-Speed TCP Variant," ACM SIGOPS Operating Systems Review, vol. 42, no. 5, pp. 64–74, 2008.
+[27] N. Cardwell, Y. Cheng, C. S. Gunn, S. H. Yeganeh, and V. Jacobson, "BBR: Congestion-Based Congestion Control," ACM Queue, vol. 14, no. 5, pp. 20–53, 2017.
+[28] R. S. Sutton and A. G. Barto, Reinforcement Learning: An Introduction, 2nd ed. MIT Press, 2018.
+[29] V. Mnih et al., "Human-Level Control Through Deep Reinforcement Learning," Nature, vol. 518, no. 7540, pp. 529–533, 2015.
+[30] H. Mao, R. Netravali, and M. Alizadeh, "Neural Adaptive Video Streaming with Pensieve," in Proc. ACM SIGCOMM, 2017, pp. 197–210.
+[31] S. Levine, A. Kumar, G. Tucker, and J. Fu, "Offline Reinforcement Learning: Tutorial, Review, and Perspectives on Open Problems," arXiv:2005.01643, 2020.
+[32] S. Fujimoto, D. Meger, and D. Precup, "Off-Policy Deep Reinforcement Learning Without Exploration," in Proc. ICML, 2019, pp. 2052–2062.
+[33] S. Fujimoto and S. S. Gu, "A Minimalist Approach to Offline Reinforcement Learning," in Proc. NeurIPS, 2021.
+[34] X. B. Peng, A. Kumar, G. Zhang, and S. Levine, "Advantage-Weighted Regression: Simple and Scalable Off-Policy Reinforcement Learning," arXiv:1910.00177, 2019.
 
 注：
 1. 对应序号的论文可以在当前目录下找到，对应的论文名字以本文的序号作为开头进行命名
-比如：[1] Z. Meng, et al., “Hairpin: Rethinking Packet Loss Recovery in Edge-based Interactive Video Streaming”, in Proc. 22nd USENIX Symp. Networked Syst. Des. Implement., 2024, pp. 907— 926.
+比如：[1] Z. Meng, et al., "Hairpin: Rethinking Packet Loss Recovery in Edge-based Interactive Video Streaming", in Proc. 22nd USENIX Symp. Networked Syst. Des. Implement., 2024, pp. 907— 926.
 这篇论文的命名为"[1]_xxx.pdf"，放在与本文相同目录下。
 2. [7][10][11]这三个序号对应的是代码仓库，请直接在浏览器上访问仓库地址获取 
 3. [9]和[20]缺失
+4. [22][23][24]为RFC文档，以.txt格式保存
+5. [26][27][28]未能自动下载，需手动获取

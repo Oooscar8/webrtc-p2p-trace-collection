@@ -1,0 +1,24 @@
+% !TEX root = ../main.tex
+
+\begin{abstract}[zh]
+\addcontentsline{toc}{chapter}{摘 \quad 要}
+  实时通信（RTC）拥塞控制算法的性能直接决定了视频通话的服务质量与用户体验。当前 WebRTC 中广泛采用的 Google Congestion Control（GCC）算法依赖启发式规则进行码率调整，在无线网络等时变性强的复杂环境中面临适应性不足的问题。在线强化学习方法虽具备环境自适应潜力，但其在线探索行为会干扰实时通话质量，部署风险较高。针对上述问题，本文提出了一种基于离线强化学习的 WebRTC 拥塞控制优化与部署验证方案，围绕平台搭建、数据构建、模型训练、推理部署与效果评估五个环节展开研究。
+
+  首先，本文构建了覆盖数据采集与 A/B 对比验证的 WebRTC 实验平台，支持在真实物理链路上采集 GCC 行为轨迹并进行策略对比实验。其次，本文将采集到的原始网络轨迹经过异常零点识别、短缺失插值与长断裂切段等清洗处理后，转换为包含 109,393 条有效转移样本的离线强化学习训练数据集，状态表示采用 5 维网络度量指标的 10 步滑动窗口。再次，本文采用隐式 Q 学习（IQL）算法完成离线策略训练，通过期望回归机制避免对分布外动作的价值查询，缓解离线学习中的分布偏移问题。在部署层面，本文实现了远端 Python 推理服务与浏览器本地 ONNX 推理两种方案，并发现在差网络场景下远端推理因与媒体流共享信道而存在原理性缺陷，最终采用浏览器本地 ONNX 推理作为 A/B 测试的主干部署形态。最后，本文在九类典型网络场景下进行了系统的 A/B 对比实验。结果表明，离线强化学习策略在所有场景下显著降低码率动作波动（42\%--73\%），在 3G、LTE、低带宽、高时延等弱网场景中有效降低 RTT 高分位值（10\%--16\%）与丢包率（18\%--25\%），综合 QoE 获得正向收益；同时在高质量网络场景中存在一定的带宽利用不足，提示后续需在奖励权重与数据覆盖方面进行进一步优化。
+
+  本文的主要贡献在于：构建了从真实数据采集到在线部署验证的完整端到端闭环，验证了离线强化学习在真实 WebRTC 系统中优化拥塞控制的可行性，并为智能拥塞控制算法的工程化部署提供了可复用的实验基础设施与评估方法论。
+\end{abstract}
+
+{
+\newfontface{\arial}{Arial}[Scale=0.94]
+\ctexset{chapter/format+={\arial}}
+\begin{abstract}[en]
+\addcontentsline{toc}{chapter}{ABSTRACT}
+The performance of congestion control algorithms in Real-Time Communication (RTC) directly determines the quality of service and user experience in video calls. Google Congestion Control (GCC), widely adopted in WebRTC, relies on heuristic rules for bitrate adjustment and suffers from insufficient adaptability in complex, time-varying environments such as wireless networks. While online reinforcement learning methods possess the potential for environmental adaptation, their exploratory behavior during training can degrade real-time call quality, posing significant deployment risks. To address these challenges, this thesis proposes an offline reinforcement learning-based congestion control optimization and deployment verification scheme for WebRTC, encompassing five stages: platform construction, dataset building, model training, inference deployment, and performance evaluation.
+
+First, this thesis constructs a WebRTC experimental platform covering data collection and A/B comparative verification, enabling GCC behavioral trajectory collection and policy comparison experiments over real physical links. Second, the collected raw network traces undergo data cleaning procedures including invalid zero-point identification, short-gap linear interpolation, and long-break segmentation, yielding an offline reinforcement learning training dataset containing 109,393 valid transitions with a state representation based on a 10-step sliding window of 5-dimensional network metrics. Third, the Implicit Q-Learning (IQL) algorithm is employed for offline policy training, leveraging expectile regression to avoid value queries on out-of-distribution actions and mitigating the distributional shift problem inherent in offline learning. At the deployment level, two inference schemes are implemented: a remote Python inference service and browser-local ONNX inference. Experiments reveal that remote inference suffers from a fundamental deficiency in degraded network scenarios due to sharing the physical channel with media streams; consequently, browser-local ONNX inference is adopted as the primary deployment modality for A/B testing. Finally, systematic A/B comparative experiments are conducted across nine representative network scenarios. Results demonstrate that the offline reinforcement learning policy significantly reduces bitrate action oscillation (42\%--73\%) across all scenarios, effectively lowers RTT tail latency (10\%--16\%) and packet loss rate (18\%--25\%) in weak-network scenarios including 3G, LTE, low-bandwidth, and high-delay conditions, achieving positive overall QoE gains. Meanwhile, the policy exhibits certain bandwidth underutilization in high-quality network scenarios, suggesting the need for further optimization in reward weighting and data coverage.
+
+The primary contributions of this thesis are: establishing a complete end-to-end closed loop from real data collection to online deployment verification, validating the feasibility of offline reinforcement learning for optimizing congestion control in real WebRTC systems, and providing reusable experimental infrastructure and evaluation methodology for the engineering deployment of intelligent congestion control algorithms.
+
+\end{abstract}
+}
