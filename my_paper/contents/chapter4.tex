@@ -1,437 +1,156 @@
-\chapter{离线强化学习训练数据集的采集和构建}
-\label{chap:training_dataset}
+\chapter{基于 IQL 的拥塞控制模型训练与部署实现}
+\label{chap:train_iql_model}
 
-\section{专家策略下的原始网络数据轨迹采集}
-\label{sec:expert-trace-collection}
+\section{离线强化学习范式与 IQL 算法选择}
 
-离线强化学习的训练数据集必须由一个安全且工程上可用的行为策略（behavior policy）生成。对于 WebRTC 拥塞控制任务，本文选择浏览器默认的 Google Congestion Control（GCC）作为“专家策略”\(\pi_E\)，并在该策略控制下采集真实网络环境中的状态—动作轨迹。一方面，GCC 作为业界主流的启发式拥塞控制算法，已在大规模生产系统中被长期验证，能够在多数网络条件下提供稳定的基线体验；另一方面，以 GCC 作为行为策略采集数据，天然满足离线强化学习的“保守性”前提：训练数据覆盖的动作分布与后续部署时的可行动作空间高度一致，从而降低分布外动作（OOD action）导致的价值外推风险。
+将强化学习引入 WebRTC 拥塞控制，首先需要解决训练范式的选择问题。在线强化学习要求智能体在训练过程中持续与环境交互，但实时视频通话对服务质量稳定性要求严苛，在线探索过程中的策略崩溃将直接损害用户体验；同时，网络状态空间规模庞大，从零开始的在线学习需要海量交互样本，且其随机探索行为会与现有 GCC 机制产生不可预测的耦合，使训练信号信噪比严重恶化。
 
-\subsection{采集链路与轨迹落盘格式}
+上述障碍促使本研究转向离线强化学习。该范式的核心特征是：策略训练完全依赖预先收集的静态数据集，学习过程中不再与环境交互。这一特征天然契合本研究的场景——第\ref{chap:dataset_construction}章已构建了规模化的网络状态-动作-奖励轨迹数据集，其中隐含了 GCC 在多种网络条件下的决策逻辑与效果反馈。离线学习可以从这些数据中提取价值，而无须承担在线探索的风险。
 
-采集链路由“浏览器前端探针 + Node.js 服务端落盘”两部分构成。两台终端设备（Peer A/B）同时打开采集页面，加载同一段本地视频文件以保证信源一致性，仅由一侧发起 WebRTC 连接并启动采集。
+然而，离线学习面临\textbf{分布偏移}（Distributional Shift）这一核心挑战：当学得策略在测试时访问数据集中未充分覆盖的状态-动作对时，价值函数估计可能产生严重偏差。本研究采用的隐式 Q 学习（Implicit Q-Learning, IQL）算法正是为应对该问题设计的解决方案——它通过期望回归机制仅从数据集中已出现动作的上界提取策略，避免了对分布外动作的价值评估，从而在不牺牲稳定性的前提下实现策略改进。
 
-在会话建立后，前端以 500ms 周期调用 \texttt{RTCPeerConnection.getStats()}，从 \texttt{candidate-pair}、\texttt{inbound-rtp} 与 \texttt{outbound-rtp} 等统计项中提取 RTT、抖动、丢包率、收发吞吐量等网络状态特征，同时读取 GCC 输出的可用带宽估计值 \texttt{availableOutgoingBitrate} 作为动作信号。每个采样点被序列化为一条结构化记录，经 WebSocket 发送至服务端，并追加写入 CSV 文件。单条记录包含 \texttt{timestamp}、\texttt{clientId}（用以区分双端）以及 \texttt{rtt\_ms}、\texttt{jitter}、\texttt{loss\_rate}、\texttt{recv\_bps}、\texttt{send\_bps}、\texttt{estimated\_bw\_bps} 等核心字段。
+\section{策略与价值网络的架构设计}
 
-在文件组织上，服务端按照 \texttt{webrtc\_network\_traces\_<scenario>\_<traceStartTs>.csv} 的命名规范落盘，其中 \texttt{scenario} 为网络环境标签，\texttt{traceStartTs} 为一次采集片段（trace segment）的起始时间戳（ms）。这种“场景标签 + 片段时间戳”的双键设计，使得自动化场景轮询下的不同网络条件能够被严格隔离为独立轨迹段，便于后续清洗、切段与统计审计。
+IQL 算法需要三类网络协同工作：策略网络 $\pi$、Q 函数 $Q(s,a)$ 与价值函数 $V(s)$。其中策略网络是部署阶段实际运行的对象，其架构设计需充分契合拥塞控制任务的特性。
 
-\subsection{自动采集模式与九类网络环境设计（对齐 A/B 测试）}
+拥塞控制任务的状态空间具有显著时序依赖：当前时刻的孤立度量值（如 RTT=50ms）无法区分“延迟正在恶化”与“延迟正在恢复”两种截然不同的演化方向，必须结合历史趋势进行综合判断。本研究因此采用基于门控循环单元（GRU）的时序编码器，整体策略网络结构如图\ref{fig:gaussian-policy-arch} 所示：50 维 feature-major 状态向量经线性层映射至 256 维隐空间，再由双层 GRU 对历史窗口进行序列建模以提取长程依赖；GRU 输出经两个残差块进一步提炼高阶特征后，由 Tanh 输出层映射至 $[-1, 1]$ 区间，最终乘以最大动作值（约 12 Mbps）得到带宽估计。残差结构在此扮演了双重角色：缓解深层网络的梯度问题，同时为策略提供“模仿 GCC 基准行为”的捷径——当残差分支输出趋零时，策略退化为对隐状态的恒等映射，对应一种保守决策。
 
-自动采集模式下，采集服务在建立连接时自动拉起 \texttt{auto\_collect\_mac.sh}，通过 macOS 的 \texttt{dnctl}/\texttt{pfctl}（dummynet）对宿主机所有入/出方向流量施加整形规则。脚本默认以 \texttt{INTERVAL\_SECONDS=300} 轮询 9 类网络环境，并在每次切换时生成新的 \texttt{traceStartTs}，再通过 \texttt{POST /auto/network} 将 \texttt{(scenario, traceStartTs)} 广播到前端；前端收到通知后重置速率计数器并开启新的 trace segment，从而保证每个片段内部的网络参数在统计意义上近似平稳。
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/chapter5/5-1_GaussianPolicy.png}
+    \caption{GaussianPolicy 策略网络结构示意}
+    \label{fig:gaussian-policy-arch}
+\end{figure}
 
-表\ref{tab:network-profiles-9}给出了本文采用的 9 类网络环境参数化设计。所有场景标签（\texttt{baseline}、\texttt{3g}、\texttt{lte} 等）不仅用于数据集采集阶段的 CSV 标注，也在后续的 A/B 测试阶段作为统一的“实验条件”标识，从而实现\textbf{采集数据分桶}与\textbf{线上评测分桶}的一致性：在相同的 \texttt{scenario} 下，对照组（原生 GCC）与实验组（RL 限速策略）的 QoE 表现可以直接进行横向对比。
+策略网络采用高斯形式而非确定性形式，即在状态 $s$ 下输出条件分布 $\mathcal{N}(\mu(s), \sigma^2)$。其中标准差 $\sigma$ 不依赖网络前向计算，而是作为独立的可学习参数 \texttt{log\_std}（截断于 $[-20, 2]$）存在。该设计不仅参数高效，更使训练过程的不确定性表达可控、可观测——较大 $\sigma$ 反映探索阶段，收敛后的较小 $\sigma$ 则表征策略的确定性程度。在推理阶段本研究直接采用均值 $\mu(s)$ 作为输出动作，以避免随机抖动对视频编码器码率配置的扰动。
+
+价值网络则采用更轻量的 MLP 结构（两层 256 维隐藏单元）。考虑到拥塞控制任务的输入维度较低（50 维），过深的价值网络容易过拟合数据噪声。Q 网络采用\textbf{Twin Q}架构以抑制过估计偏差：维护两个独立初始化的 Q 网络 $Q_1$、$Q_2$，目标值计算时取 $\min(Q_1, Q_2)$。在离线场景下，数据稀疏区域的 Q 值过估计将引导策略偏离行为支撑集，Twin Q 通过最小化操作显著降低了两个网络同时高估同一区域的概率。
+
+\section{基于 IQL 的训练目标与训练流程}
+
+IQL 算法的核心创新在于以\textbf{期望回归}（Expectile Regression）替代传统 Q 学习中的 $\max_a Q(s,a)$ 操作。后者在离线场景下会因数据集中未出现动作的 Q 值估计不可靠而引入严重过估计；前者则通过不对称 L2 损失估计 Q 值分布的高分位点，从而在不显式访问分布外动作的前提下提取策略改进信号。具体地，价值函数通过最小化
+\[
+\mathcal{L}_V(\theta) = \mathbb{E}_{(s,a) \sim \mathcal{D}} \left[ L_2^\tau \left( Q_{\hat{\theta}}(s,a) - V_\theta(s) \right) \right], \quad L_2^\tau(u) = |\tau - \mathbb{I}(u < 0)| \cdot u^2
+\]
+进行训练。当 $\tau > 0.5$ 时，损失对正残差赋予更大权重，使 $V(s)$ 收敛至 $Q$ 值分布的高分位点而非均值。本研究采用 $\tau = 0.7$，使价值函数能够自动识别数据集中的“好动作”，无需遍历所有可能动作即可估计接近最优的状态价值。
+
+Q 函数的更新沿用标准 Bellman 方程，但目标值由价值函数 $V$ 而非 $Q$ 自身回引：
+\[
+y = r + \gamma (1 - d) V(s'), \quad \mathcal{L}_Q(\phi) = \mathbb{E}_{(s,a,r,s',d) \sim \mathcal{D}} \left[ \left( Q_\phi(s,a) - y \right)^2 \right].
+\]
+该设计避免了 Q 函数自举（bootstrap）带来的累积误差，因为 $V(s')$ 已通过期望回归从数据中提取了稳定估计。目标 Q 网络通过软更新 $\theta_{\text{target}} \leftarrow (1-\tau_s) \theta_{\text{target}} + \tau_s \theta_{\text{online}}$（$\tau_s = 0.005$）平滑追踪在线 Q 网络。
+
+策略网络则通过\textbf{优势加权行为克隆}进行优化：
+\[
+\mathcal{L}_\pi(\psi) = \mathbb{E}_{(s,a) \sim \mathcal{D}} \left[ \exp(\beta \cdot A(s,a)) \cdot \left(-\log \pi_\psi(a|s)\right) \right],
+\]
+其中优势函数 $A(s,a) = Q(s,a) - V(s)$ 衡量动作相对于平均水平的优劣。指数权重 $\exp(\beta \cdot A)$ 使高优势动作主导梯度方向，引导策略向数据集中“更好的子集”靠拢；而对负优势动作的权重抑制则防止策略偏离数据支撑集。本研究取 $\beta = 3.0$，并将指数权重截断至 100 以避免极端样本主导训练。当 $\beta \to 0$ 时该目标退化为普通行为克隆，无法实现策略改进；过大的 $\beta$ 又会引入训练不稳定性，二者之间的权衡是 IQL 调参的关键。
+
+\ref{fig:iql-training-overview} 概括了三类网络在单步更新中的数据流与执行顺序，完整训练超参数列于\autoref{tab:iql-hparams}。其中折扣因子 $\gamma = 0.99$ 强调拥塞控制决策的长期累积效应——当前时刻的带宽估计将在后续数秒内持续影响编码器码率与队列状态；最大动作值则取自训练数据动作分布的 99.5\% 分位点的 1.05 倍（约 12 Mbps），在覆盖大多数场景的同时避免对极端异常的过拟合。
+
+\begin{figure}[htbp]
+    \centering
+    \begin{minipage}{0.40\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/chapter5/5-2_three_network.png}
+    \end{minipage}\hfill
+    \begin{minipage}{0.30\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/chapter5/5-3_iql_false_code.png}
+    \end{minipage}
+    \caption{IQL 训练流程与损失构成示意}
+    \label{fig:iql-training-overview}
+\end{figure}
 
 \begin{table}[htbp]
     \centering
-    \small
-    \begin{tabular}{|l|c|c|c|p{6.2cm}|}
+    \begin{tabular}{|l|l|l|}
         \hline
-        场景标签 & 带宽（bw） & 延迟（delay） & 丢包率（plr） & 设计目的/对应评测维度 \\
+        超参数 & 取值 & 说明 \\
         \hline
-        \texttt{baseline} & 1000 Mbit/s & 0 ms & 0\% & 理想链路基线，用于验证采集链路与模型在高质量网络下的上界表现 \\
-        \hline
-        \texttt{3g} & 555 Kbit/s & 100 ms & 0\% & 低带宽 + 中等时延的蜂窝弱网，考察策略在吞吐受限条件下的保守性与稳定性 \\
-        \hline
-        \texttt{lte} & 30 Mbit/s & 58 ms & 0\% & 高容量蜂窝网络，带宽充裕但 RTT 偏高，考察延迟约束下的码率选择 \\
-        \hline
-        \texttt{dsl} & 1128 Kbit/s & 5 ms & 0\% & 近似“带宽不对称”的接入链路抽象（脚本中以统一瓶颈带宽近似），用于覆盖低带宽但低 RTT 的典型宽带场景 \\
-        \hline
-        \texttt{low\_bw} & 500 Kbit/s & 0 ms & 0\% & 极低稳定带宽上限，考察策略在持续瓶颈下的目标码率收敛行为 \\
-        \hline
-        \texttt{high\_loss} & 10 Mbit/s & 0 ms & 5\% & 中等带宽下的持续随机丢包，考察策略对非拥塞性丢包噪声的鲁棒性 \\
-        \hline
-        \texttt{high\_delay} & 5 Mbit/s & 150 ms & 0\% & 中等带宽下的高 RTT，考察策略对排队/传播时延惩罚项的响应 \\
-        \hline
-        \texttt{fluctuating} & 多阶段时变 & 多阶段时变 & 多阶段时变 & 在单个 5 分钟窗口内按预设时间表进行阶梯式切换（带宽 20M→3M→800K→50M→100K→…），用于模拟非平稳网络与突发事件 \\
-        \hline
-        \texttt{very\_bad} & 1 Mbit/s & 500 ms & 10\% & 极端弱网（低带宽 + 超高 RTT + 高丢包），用于压力测试与策略失效边界分析 \\
+        训练步数 $T$ & 300{,}000 & 总优化迭代次数 \\
+        批量大小 $B$ & 512 & 每步采样数 \\
+        折扣因子 $\gamma$ & 0.99 & 长期奖励折扣 \\
+        软更新系数 $\tau_s$ & 0.005 & Target Q 跟踪速率 \\
+        期望回归参数 $\tau_{\text{IQL}}$ & 0.7 & 价值函数分位数 \\
+        逆温度系数 $\beta$ & 3.0 & 优势加权强度 \\
+        学习率 $\eta$ & $3 \times 10^{-4}$ & 全网络统一 \\
+        梯度裁剪阈值 & 1.0 & 数值稳定保护 \\
+        最大动作值 & $\sim 12$ Mbps & 动作空间上界 \\
         \hline
     \end{tabular}
-    \caption{自动采集模式的 9 类网络环境配置（与后续 A/B 测试场景标签保持一致）}
-    \label{tab:network-profiles-9}
+    \caption{IQL 训练超参数配置}
+    \label{tab:iql-hparams}
 \end{table}
 
-需要强调的是，以上配置并非为了“仿真网络”，而是为了在真实 WebRTC 协议栈上构造一组可控、可复现且覆盖典型劣化维度（带宽、时延、丢包、非平稳波动）的物理信道条件，以获得具有代表性的 GCC 行为数据集。本文将在后文“采集数据的质量验证与可视化分析”小节中，对各场景下采集到的原始网络轨迹进行系统的可视化审查与统计分析，验证数据的物理一致性以及采集/清洗链路的端到端有效性。
-
-\section{数据集构建的整体流程概述}
-
-离线强化学习区别于在线学习的核心特征在于，策略训练完全依赖于预先收集的静态数据集，而不再与环境进行交互式采样。这一范式对训练数据集的质量提出了极高的要求：数据中的状态分布、动作覆盖范围以及奖励信号的可靠性，直接决定了学得策略的性能上限。对于本研究所面向的 WebRTC 视频通话拥塞控制任务而言，数据集构建面临的挑战更为复杂——原始采集数据来源于真实物理网络环境下的浏览器 getStats API 周期性轮询，存在采样空洞、传感器零点漂移、多客户端时序交织以及网络场景切换导致的轨迹断裂等问题，这些均需要在进入训练管线之前得到妥善处理。
-
-本研究设计并实现了一套完整的数据集构建管线，封装于 \texttt{tools/build\_rl\_dataset.py} 脚本之中。该管线涵盖从原始 CSV 轨迹文件到标准化四元组数据集的全部处理阶段，包括：（1）原始轨迹的多步预处理与清洗；（2）马尔可夫决策过程四元组 $(s_t, a_t, r_t, s_{t+1})$ 的滑动窗口构建；（3）状态空间的固定尺度归一化；（4）训练集的序列化与元信息持久化。最终产出的数据集包含 \textbf{109,393 条有效 transition}，状态维度为 50，覆盖 3G、LTE、WiFi 等多种真实网络场景下的 \textbf{1,191 个连续有效轨迹段}。
-
-\section{原始轨迹数据的预处理与清洗}
-
-\subsection{数据清洗的设计原则}
-
-真实 WebRTC 采集数据与仿真器产出的理想化轨迹存在本质差异。浏览器 getStats API 虽然能够以约 1 秒周期提供当前连接的底层网络度量值（RTT、接收吞吐量、丢包率、抖动等），但该接口在实际运行中会产生多种形式的数据缺陷：
-
-\begin{enumerate}
-    \item \textbf{周期性零点异常}：在 WebRTC 内部统计模块尚未完成一轮完整测量的时间窗口内，部分指标（尤其是 RTT 和带宽估计值）会暂时返回 0 或空值。然而此时数据流仍在正常传输，相邻采样点均为正常非零值，因此这些零点并非反映真实网络状态的骤降，而是 API 实现层面的采样空洞。
-    \item \textbf{短暂缺失段}：由于浏览器主线程阻塞、垃圾回收、标签页切换等原因，连续 1–3 个采样周期内可能出现字段值缺失。这类短暂缺失不代表网络连接中断，适合通过插值进行修复。
-    \item \textbf{长期断裂段}：当网络连接真正中断、ICE 重协商或测试脚本主动切换网络场景时，轨迹中会出现长达数十秒乃至更久的连续缺失区间。此类断裂区间内的网络状态不可推测，若强行插值会引入严重的虚假轨迹，必须在此处将轨迹切断为独立的段落。
-\end{enumerate}
-
-基于上述分析，本研究在 \texttt{clean\_df} 函数中实现了一套三阶段清洗管线，遵循以下设计原则：
-
-\begin{itemize}
-    \item \textbf{最小必要字段保留}：仅保留包含时间戳 \texttt{timestamp}、客户端标识 \texttt{clientId}、五维状态列（\texttt{send\_bps}、\texttt{recv\_bps}、\texttt{rtt\_ms}、\texttt{loss\_rate}、\texttt{jitter}）以及动作列 \texttt{estimated\_bw\_bps} 的有效行，缺少这些字段的行直接丢弃；
-    \item \textbf{异常值标记而非直接删除}：对可疑的周期性零点不做行级删除，而是将其重标记为 NaN，交由后续修复阶段统一处理，从而避免打乱时序索引；
-    \item \textbf{修复尺度限定}：仅对不超过 3 个连续采样周期的短缺失段实施线性插值修复，超出该阈值的长断裂区域执行轨迹切段操作。
-\end{itemize}
-
-\subsection{异常零点识别与标记}
-
-异常零点识别的核心困难在于区分"网络状态真正为零"与"API 采样缺陷导致的虚假零值"。本研究采用的判别逻辑封装于 \texttt{mark\_invalid\_zero\_points} 函数中，其判别准则如下：
-
-对于 RTT 指标和 GCC 估计带宽（\texttt{estimated\_bw\_bps}），当某一行对应的度量值为零或负值，且同时满足以下两个条件之一时，将其判定为异常零点并标记为 NaN：
-
-\begin{enumerate}
-    \item \textbf{流量活跃性条件}：同一行中 \texttt{recv\_bps}、\texttt{send\_bps}、\texttt{loss\_rate}、\texttt{jitter} 中至少有一个指标为正值，表明此时仍有数据流在传输，网络连接并未中断；
-    \item \textbf{相邻非零条件}：该指标的前一行或后一行为正值，表明零值仅是孤立的瞬时采样异常，而非连续的真实信号。
-\end{enumerate}
-
-该判别准则的设计思路在于：如果一个 RTT=0 的样本出现在两侧均为正 RTT 的正常采样之间，且当时仍有吞吐量流过，则该零值远更可能是 getStats API 在当前采样周期内未完成 RTCP 往返测量所致，而非网络延迟瞬间降为零的物理事件。
-
-在实现层面，函数按 \texttt{clientId} 分组处理，对每个客户端的 RTT 列和动作列分别执行上述判别并将命中的零点替换为 \texttt{np.nan}。这一步骤不修改 \texttt{send\_bps}、\texttt{recv\_bps}、\texttt{loss\_rate} 和 \texttt{jitter} 列，因为这些指标的零值在物理上是合理的（例如接收吞吐量在连接建立初期确实为零）。
-
-此外，在异常零点标记之前，脚本还对所有数值列执行了基础的物理范围约束：吞吐量、RTT、抖动等指标不应为负值，通过 \texttt{clip(lower=0.0)} 保证下界；丢包率通过 \texttt{clip(0.0, 1.0)} 约束在 [0, 1] 区间内。这一步并非修复缺失，而是在约束明显越界的数值，将测量噪声限制在物理可解释的范围内。
-
-\subsection{短缺失段的线性插值修复}
-
-经过异常零点标记后，轨迹中仍然存在由浏览器主线程阻塞或其他临时性因素导致的短暂 NaN 区间。本研究采用\textbf{分段线性插值}策略对这些短缺失段进行修复，其控制参数为 \texttt{max\_short\_gap}（默认值为 3），即仅修复不超过 3 个连续 NaN 采样点的缺失段。
-
-修复算法的具体实现封装于 \texttt{interpolate\_short\_gaps\_series} 函数中，其工作流程如下：
-
-\begin{enumerate}
-    \item 构建布尔掩码标识所有 NaN 位置；
-    \item 通过连续 NaN 的游程编码（run-length encoding via \texttt{cumsum}）计算每段连续 NaN 的长度；
-    \item 仅对长度不超过 \texttt{max\_short\_gap} 的 NaN 段标记为"待修复"；
-    \item 使用 Pandas 的 \texttt{interpolate(method='linear', limit\_area='inside')} 对整列做线性插值，但仅将插值结果填入步骤 3 标记的位置，其余长缺失段保持 NaN 不变。
-\end{enumerate}
-
-该策略的关键约束在于 \texttt{limit\_area='inside'} 参数——它确保插值仅在两侧均有有效观测值的区间内部进行，不会向轨迹首尾的边界外推。同时，按 \texttt{clientId} 分组处理保证不同客户端的插值互不干扰。
-
-选择 \texttt{max\_short\_gap=3} 的依据是：在 1 秒采样周期下，3 个连续缺失采样点对应约 3 秒的真实时间跨度。在典型的室内 WiFi 或移动网络环境中，3 秒以内的 RTT、吞吐量等指标变化可以合理地用线性趋势近似；而超过该阈值则可能跨越了网络场景切换（如 3G→LTE handover）或物理链路断开，线性插值不再具有物理可信度。
-
-\subsection{长断裂段的轨迹切分}
-
-对于超过 \texttt{max\_short\_gap} 阈值的连续缺失区域，线性插值已不再适用。此时需要将原本连续的时序轨迹在断裂位置切分为多个独立的有效段落（segment），以确保后续滑动窗口构建时不会跨越无数据区间。
-
-切段逻辑由 \texttt{assign\_segment\_ids} 函数实现。该函数按 \texttt{clientId} 分组，对每个客户端的数据帧执行如下操作：
-
-\begin{enumerate}
-    \item 计算逐行的"完整性标记"：当且仅当该行的所有五个状态列与动作列均非 NaN 时，标记为有效（\texttt{valid=True}）；
-    \item 检测有效段的起始边界：当前行有效而前一行无效（或为首行）时，标记为新段起始；
-    \item 对起始标记做前缀累加求和，得到从 0 开始递增的段编号 \texttt{segment\_id}；
-    \item 无效行的 \texttt{segment\_id} 设为 -1，最终被过滤。
-\end{enumerate}
-
-经过此步骤后，原始轨迹被拆分为多个长度不等的连续有效段。以实际采集数据为例，一段包含 600 行原始数据的 3G 场景 CSV 文件，经过清洗可能被切分为 5–7 个有效段，其中最长段可达 300 行，最短段仅十余行（低于窗口尺寸时后续将被自然过滤）。manifest 统计表明，最终数据集包含 \textbf{1,191 个有效段}，跨越多次独立采集会话与多种网络场景。
-
-\subsection{清洗管线的完整执行顺序}
-
-综合上述各步骤，\texttt{clean\_df} 函数的完整执行顺序为：
-
-\begin{enumerate}
-    \item \textbf{列存在性校验}：确认 \texttt{timestamp}、\texttt{clientId}、五维状态列、动作列均存在于原始 DataFrame 中；
-    \item \textbf{数据类型强制转换}：通过 \texttt{coerce\_numeric} 将所有相关列转为浮点数，无法解析的字符串统一变为 NaN；
-    \item \textbf{基础行过滤}：丢弃 \texttt{timestamp} 或 \texttt{clientId} 为空的行；
-    \item \textbf{时序排序与去重}：按 \texttt{(clientId, timestamp)} 稳定排序，对同一客户端同一时间戳的重复行仅保留最后一条；
-    \item \textbf{物理范围裁剪}：吞吐量/RTT/抖动下界 clip 为 0，丢包率 clip 到 [0,1]；
-    \item \textbf{异常零点标记}：按客户端分组执行 \texttt{mark\_invalid\_zero\_points}；
-    \item \textbf{短缺失插值}：\texttt{repair\_short\_gaps(max\_gap=3)}；
-    \item \textbf{长断裂切段}：\texttt{assign\_segment\_ids}，并过滤掉 \texttt{segment\_id < 0} 的无效行。
-\end{enumerate}
-
-\subsection{采集数据的质量验证与可视化分析}
-
-离线强化学习的策略质量高度依赖训练数据的真实性与完整性。若原始采集轨迹包含大量系统级伪影（如 WebRTC 引擎在 ICE 重连期间输出的零值序列、浏览器进程被系统调度暂停后产生的时间断裂等），而这些异常被直接纳入训练集，将导致价值函数在不真实的状态区域产生过拟合，进而使策略在部署阶段面对正常网络行为时作出错误决策。因此，在执行自动化清洗管线之前，有必要对采集数据进行系统性的可视化审查，确认两方面关键问题：其一，原始轨迹是否总体呈现出符合物理预期的网络动态特征；其二，清洗管线施加的修复操作是否合理保留了有效信息而仅消除了伪影。
-
-为此，本研究编写了专用的可视化分析脚本，对采集得到的全部 9 类网络场景（baseline、3G、LTE、DSL、low\_bw、high\_loss、high\_delay、fluctuating、very\_bad）共 152 段会话的原始 CSV 文件逐一生成"原始轨迹 vs 修复后轨迹"对比图。每张对比图包含 5 行 × 2 列共 10 个子图：左列展示未经任何处理的原始时序曲线，右列展示经清洗管线处理后的修复时序曲线；5 行分别对应 RTT（ms）、Jitter（ms）、Loss Rate（\%）、接收吞吐量 recv\_bps（Mbps）、GCC 估计带宽 estimated\_bw\_bps（Mbps）五项关键网络指标。同一会话中的两台设备（Peer A 与 Peer B）在原始图与修复图中使用相同颜色标识，便于追踪设备对应关系与双向传输的对称性。
+训练循环以标准方式从 ReplayBuffer 中采样并依次执行价值更新、Q 函数更新、策略更新与目标网络软更新，每 5000 步在预留验证集（占 10\%）上评估一次并保存中间状态。验证阶段以\textbf{负对数似然}（NLL）作为主要监控指标，原因在于高斯策略的优化目标本质上是最大化数据动作在策略分布下的似然，NLL 同时惩罚均值偏差与不合理的方差估计，能够区分“均值拟合差”与“通过增大方差掩盖误差”两种失效模式，比单纯的 MSE 更贴合训练目标。\ref{fig:training-loss-curves} 与\ref{fig:actor-learning-curve} 展示了训练过程中关键损失与 Actor 学习曲线的演化趋势，可见各损失均稳定下降且未出现 Q 值崩溃或 NLL 反弹的异常现象。需指出，离线验证指标仅反映策略对行为策略的拟合程度，并不直接代表真实环境中的控制性能，后者需通过\ref{chap:ab-test} 章的在线 A/B 测试加以验证。
 
 \begin{figure}[htbp]
     \centering
-    % 第一排：baseline / 3g / fluctuating
-    \begin{minipage}{0.32\textwidth}
+    \begin{minipage}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{figures/traces/baseline_trace_8038.png}
-        \caption{baseline 场景}
+        \includegraphics[width=\textwidth]{figures/chapter5/5-4_loss_curse.png}
     \end{minipage}\hfill
-    \begin{minipage}{0.32\textwidth}
+    \begin{minipage}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{figures/traces/3g_trace_7621.png}
-        \caption{3g 场景}
-    \end{minipage}\hfill
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/fluctuating_trace_7180.png}
-        \caption{fluctuating 场景}
+        \includegraphics[width=\textwidth]{figures/chapter5/5-5_NLL curve.png}
     \end{minipage}
+    \caption{训练过程关键损失曲线}
+    \label{fig:training-loss-curves}
 \end{figure}
 
 \begin{figure}[htbp]
     \centering
-    % 第二排：dsl / high_delay / high_loss
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/dsl_trace_7463.png}
-        \caption{dsl 场景}
-    \end{minipage}\hfill
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/high_delay_trace_7689.png}
-        \caption{high delay 场景}
-    \end{minipage}\hfill
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/high_loss_trace_7461.png}
-        \caption{high loss 场景}
-    \end{minipage}
+    \includegraphics[width=0.75\textwidth]{figures/chapter5/5-6_Actor_learning_curve.png}
+    \caption{Actor 学习曲线}
+    \label{fig:actor-learning-curve}
+\end{figure}
+
+训练完成后，本研究以 checkpoint 形式持久化策略网络、Twin Q 网络、训练状态与归一化元信息，并固定随机种子以保证实验可复现。
+
+\section{模型部署架构的演进与一致性保证}
+
+训练好的策略需要嵌入实际的 WebRTC 控制回路才能产生效益，而部署形态的选择直接决定了推理的实时性和有效性。本研究在初期阶段采用了方案 A：远端 Python HTTP/WebSocket 推理服务——将 PyTorch 模型部署在服务端，前端通过 HTTP/WebSocket 上报状态向量并接收带宽估计。该方案与训练运行时完全一致，调试工具链完整，能够快速验证“采集—训练—部署”全链路的逻辑正确性，并支持不重新部署前端的情况下进行模型热更新。
+
+然而，将方案 A 投入差网络场景的 A/B 测试时，一个根本性的工程矛盾浮现：越是劣化的网络条件下，RL 实验组的表现反而越不稳定。深入分析后发现，问题的根源不在模型本身，而在于推理请求所依赖的 TCP/WebSocket 链路与被测试的 WebRTC 媒体链路共享同一条物理信道。当信道进入拥塞状态时，推理请求自身遭遇排队延迟乃至丢包重传，导致策略决策在最需要快速响应的时刻反而出现数十毫秒至上百毫秒的滞后。这一滞后使模型基于“过时”的网络状态产生输出，与 RTCP 反馈的实际状态发生相位错位，从而在网络恢复时做出错误的保守决策、在网络恶化时反应不及——形成“控制滞后→拥塞加剧→推理更慢”的恶性循环。
+
+这一发现驱动本研究转向\textbf{方案 B：浏览器本地 ONNX 边缘推理}。将训练得到的策略网络以 opset 17 导出为 ONNX 计算图（流程见图\ref{fig:onnx-export}）。在导出后使用 ONNX Runtime 对策略网络重新加载，在相同输入下与 PyTorch 原始模型逐元素对比输出张量，要求最大绝对偏差不超过 $10^{-5}$ ，从而确认 ONNX 计算图忠实复现了原模型的数值行为。前端基于 \texttt{onnxruntime-web} 在浏览器进程内完成推理，并重建了与训练侧语义对齐的因果特征清洗与状态归一化流水线，从而将完整的控制回路封闭在客户端进程中（控制回路结构见图\ref{fig:policy-runtime}）。迁移之后，推理延迟从差网络下的数十至上百毫秒骤降至亚毫秒级，且与底层信道状态完全解耦，A/B 测试评估结果随之变得稳定可解释。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/chapter5/5-7_onnx_output.png}
+    \caption{ONNX 模型导出与一致性校验流程}
+    \label{fig:onnx-export}
 \end{figure}
 
 \begin{figure}[htbp]
     \centering
-    % 第三排：low_bw / lte / very_bad
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/low_bw_trace_7802.png}
-        \caption{low bandwidth 场景}
-    \end{minipage}\hfill
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/lte_trace_7870.png}
-        \caption{lte 场景}
-    \end{minipage}\hfill
-    \begin{minipage}{0.32\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/traces/very_bad_trace_7552.png}
-        \caption{very bad 场景}
-    \end{minipage}
+    \includegraphics[width=0.9\textwidth]{figures/chapter5/5-8_policy_runtime.png}
+    \caption{浏览器端 ONNX 推理与控制回路结构}
+    \label{fig:policy-runtime}
 \end{figure}
 
-通过系统审查全部可视化输出，验证了以下关键事实：
-
-\textbf{第一，原始轨迹呈现出符合真实网络物理特性的动态波动模式。} 在 baseline 场景下，接收吞吐量稳定在 3–5 Mbps 附近并伴随轻微随机扰动，RTT 维持在 2–10 ms 低位；在 3G 场景下，受限于 555 Kbps 的管道带宽约束，吞吐量呈现明显的上限截断效应，同时 RTT 因排队延迟上升至 200–400 ms 量级；在 fluctuating 场景下，吞吐量随模拟的多阶段网络状态切换（20 Mbps → 3 Mbps → 800 Kbps → 恢复）呈现清晰的阶梯式跃变与渐进恢复趋势。上述观测与 dnctl/pfctl 施加的限速配置参数高度吻合，确认了采集链路的端到端有效性。
-
-\textbf{第二，原始轨迹中确实存在需要清洗的系统级伪影。} 典型表现为：（1）ICE 连接建立初期或断线重连期间，getStats API 返回 RTT=0、recv\_bps=0 的无效零点序列，持续 1–5 个采样周期；（2）浏览器进程被操作系统暂停或网络接口切换时，出现数秒至数十秒的数据断裂（时间戳不连续）；（3）个别采样点出现物理上不合理的突变（如 RTT 从 50 ms 瞬间跳变至 0 后立即恢复）。这些伪影若不处理，会在滑动窗口状态表示中引入错误的梯度信号，干扰 GRU 编码器对网络趋势的判断。
-
-\textbf{第三，清洗管线有效消除了上述伪影而未破坏真实网络动态。} 修复后的轨迹图中，短期零点被线性插值平滑填充，长断裂被切分为独立的 segment\_id 以避免跨断裂构建虚假的时序依赖，而正常的网络波动（包括带宽下降、RTT 上升等拥塞信号）均被完整保留。修复图右上角标注的 segment 数量直观反映了每段会话被切分为多少个有效连续段，为后续训练集中跨段隔离提供了依据。
-
-该可视化验证流程在数据集构建管线中具有不可替代的作用——它提供了人工审查的"最后一道关卡"，确保送入离线强化学习训练框架的数据既忠实反映了真实网络动态，又不包含可能误导策略学习的系统伪影。
-
-\section{强化学习四元组的构建}
-
-\subsection{马尔可夫决策过程的形式化定义}
-
-将 WebRTC 拥塞控制问题建模为马尔可夫决策过程 $\mathcal{M} = \langle \mathcal{S}, \mathcal{A}, P, R, \gamma \rangle$ 时，需要为 MDP 的各组成元素赋予具体的网络语义。在本研究中：
-
-\begin{itemize}
-    \item \textbf{状态空间~$\mathcal{S}$}：由最近 10 个采样周期内 5 个网络度量指标构成的滑动窗口向量，维度为 $5 \times 10 = 50$；
-    \item \textbf{动作空间~$\mathcal{A}$}：GCC 算法在当前时刻的带宽估计值 \texttt{estimated\_bw\_bps}，作为连续动作量；
-    \item \textbf{状态转移~$P(s_{t+1}|s_t, a_t)$}：由真实网络环境和 WebRTC 协议栈的内部动态共同决定，属于未知的环境转移核；
-    \item \textbf{奖励函数~$R(s_t, a_t, s_{t+1})$}：基于下一时刻观测到的网络质量指标计算的即时 QoE 信号；
-    \item \textbf{折扣因子~$\gamma$}：训练时设为 0.99，反映拥塞控制决策对未来长期通信质量的关注。
-\end{itemize}
-
-在离线强化学习框架下，$P$ 无需显式建模——学习算法仅从预先收集的状态转移数据中隐式学习价值函数和策略。这正是训练数据集质量至关重要的原因。
-
-\subsection{滑动窗口状态表示}
-
-单一时刻的网络度量值难以提供足够的决策信息。例如，仅凭当前 RTT=50ms 无法判断网络延迟是在恶化还是在恢复。为了捕获网络状态的变化趋势，本研究采用滑动窗口机制构造状态向量。具体而言，时刻 $t$ 的状态 $s_t$ 定义为从 $t-9$ 到 $t$ 共 10 个连续采样时刻的五维度量值拼接而成的窗口矩阵：
-
-\[
-W_t = \begin{bmatrix}\text{send\_bps}_{t-9} & \text{send\_bps}_{t-8} & \cdots & \text{send\_bps}_t \\\text{recv\_bps}_{t-9} & \text{recv\_bps}_{t-8} & \cdots & \text{recv\_bps}_t \\\text{rtt\_ms}_{t-9} & \text{rtt\_ms}_{t-8} & \cdots & \text{rtt\_ms}_t \\\text{loss\_rate}_{t-9} & \text{loss\_rate}_{t-8} & \cdots & \text{loss\_rate}_t \\\text{jitter\_ms}_{t-9} & \text{jitter\_ms}_{t-8} & \cdots & \text{jitter\_ms}_t\end{bmatrix}_{5 \times 10}
-\]
-
-该窗口矩阵在送入策略网络之前以 \textbf{feature-major} 方式展平为一维向量：
-
-\[
-s_t = [\text{send\_bps}_{t-9:t},\ \text{recv\_bps}_{t-9:t},\ \text{rtt\_ms}_{t-9:t},\ \text{loss\_rate}_{t-9:t},\ \text{jitter\_ms}_{t-9:t}] \in \mathbb{R}^{50}
-\]
-
-选择 feature-major 而非 time-major 布局的考量在于：GRU 编码器的输入序列以特征通道为单位组织时，每个通道内的 10 步连续值恰好构成一个时间序列，GRU 能够在通道维度上逐步提取每类指标的时序演化模式，再通过后续全连接层融合跨通道信息。这种布局与 Schaferct 竞赛冠军方案保持一致，便于训练配置的直接复用。
-
-在实现层面，\texttt{window\_to\_feature\_major} 函数接收窗口 DataFrame 后先转为 $5 \times 10$ 的 NumPy 数组，再对行（feature 维度）做转置存储，确保内存连续性。
-
-\subsection{动作的定义与过滤}
-
-本研究将 GCC 算法在每个采样时刻输出的带宽估计值 \texttt{estimated\_bw\_bps} 直接作为强化学习的动作 $a_t$。这一选择的依据在于：在离线强化学习的"行为策略"语境下，GCC 正是生成训练数据的行为策略（behavior policy），其输出的带宽估计值等价于行为策略在当前状态下采取的动作。IQL 算法通过隐式约束避免对训练集中未出现的动作做价值评估，因此直接使用行为策略的动作输出是合理且必要的。
-
-在构建 transition 时，脚本通过 \texttt{--min-action} 参数（默认值 1.0 bps）对极小动作值进行过滤。当 \texttt{estimated\_bw\_bps < 1.0} 时，该样本被丢弃。该阈值的设定旨在排除 GCC 尚未完成初始探测阶段（initial probing）时产生的无效估计值——这些值通常对应连接建立初期 ICE 候选收敛前的瞬态，不具备有效的决策参考意义。
-
-从实际数据集统计来看，所有有效 transition 的动作值分布范围为 92,400 bps 至 11,252,297 bps（均值约 1,208,773 bps，即 1.2 Mbps），覆盖了从极低带宽（约 90 kbps）到高质量视频通话（约 11 Mbps）的完整决策空间。
-
-\subsection{奖励函数的设计}
-
-奖励函数是将多维网络质量目标压缩为标量信号的关键组件。本研究采用加权线性组合形式的 QoE 奖励函数，在执行动作 $a_t$ 后、观测到下一时刻状态 $s_{t+1}$ 时计算即时奖励：
-
-\[
-r_t = \alpha \cdot \log(1 + \frac{\text{recv\_bps}_{t+1}}{10^6}) - \beta \cdot \frac{\text{rtt\_ms}_{t+1}}{1000} - \gamma \cdot \text{loss\_rate}_{t+1} - \delta \cdot \frac{|a_t - a_{t-1}|}{10^6}
-\]
-
-各项的物理含义与参数选择如下：
-
-\textbf{第一项：视频质量正向激励}（$\alpha = 1.0$）。采用对数函数 $\log(1 + x)$ 对接收吞吐量进行饱和映射，其中吞吐量以 Mbps 为单位输入。对数形式的选取基于视频编码的率失真特性——在低码率区间，带宽增加对画质的提升效果显著（边际效用大）；而在高码率区间，进一步增加带宽带来的主观画质改善趋于饱和。这与人类视觉感知的韦伯-费希纳定律相吻合。
-
-\textbf{第二项：延迟惩罚}（$\beta = 1.0$）。将 RTT 从毫秒量级缩放到秒级后直接作为惩罚项。对于实时视频通话场景，端到端延迟是影响交互流畅度的首要因素——当 RTT 超过 150 ms 时，用户明显感知到对话延迟；超过 400 ms 时通话体验严重退化。线性惩罚形式确保延迟减少的边际收益始终为正。
-
-\textbf{第三项：丢包惩罚}（$\gamma = 1.0$）。丢包率直接作为惩罚项，取值范围 [0, 1]。视频帧的部分丢失将导致解码端出现马赛克、花屏或帧冻结，用户体验急剧下降。与 RTT 惩罚取相同权重反映了二者在 QoE 评估中的同等重要性。
-
-\textbf{第四项：动作平滑惩罚}（$\delta = 0.1$）。对相邻时刻带宽估计值的变化幅度施加较弱的惩罚。该项的作用在于抑制策略网络输出剧烈振荡的控制信号——频繁的大幅码率切换会导致视频编码器在关键帧与低质量帧之间反复跳转，即使平均码率相同也会造成用户感知到的画面"抖动"。选择 $\delta = 0.1$ 这一较小权重是为了在鼓励快速响应与避免过度振荡之间取得平衡。
-
-从实际数据集统计来看，109,393 条 transition 的奖励分布范围为 $[-1.65, +2.13]$，均值约 0.155，表明在 GCC 行为策略下多数时刻网络状况处于可接受的正奖励区间，但差网络场景（高 RTT、高丢包）仍会产生显著的负奖励信号，为离线 RL 学习"在何种状态下应降低码率"提供了有效的监督信息。
-
-\subsection{四元组滑动窗口的构建过程}
-
-在清洗后的数据帧上，\texttt{build\_transitions\_for\_client} 函数按 \texttt{(clientId, segment\_id)} 分组，对每个有效段独立构建 transition 序列。具体流程为：
-
-\begin{enumerate}
-    \item 对当前段的数据按 \texttt{timestamp} 升序排列并重置索引；
-    \item 判断段长度是否满足最低要求：$n\_rows \geq window\_size + 1 = 11$，不满足则跳过；
-    \item 从索引位置 $t = window\_size - 1 = 9$ 开始，以步长 \texttt{stride=1} 逐步滑动，直至 $t = n\_rows - 2$；
-    \item 对每个合法的 $t$ 位置，提取：
-    \begin{itemize}
-        \item 当前状态窗口 $s_t$：行 $[t-9, t]$ 的 5 列值，经 feature-major 展平为 50 维向量；
-        \item 动作 $a_t$：第 $t$ 行的 \texttt{estimated\_bw\_bps}；
-        \item 前一动作 $a_{t-1}$：第 $t-1$ 行的 \texttt{estimated\_bw\_bps}（用于计算平滑惩罚）；
-        \item 奖励 $r_t$：基于第 $t+1$ 行的度量值和上述 QoE 公式计算；
-        \item 下一状态窗口 $s_{t+1}$：行 $[t-8, t+1]$ 的 5 列值；
-        \item 终止标志 \texttt{terminal}：当 $t+1$ 为段内最后一行时置 1，否则为 0。
-    \end{itemize}
-    \item 如果当前行的动作值低于 \texttt{min\_action} 阈值，则跳过该 transition。
-\end{enumerate}
-
-由于切段操作保证了每个段内不存在 NaN，因此滑动窗口永远不会跨越数据断裂区间。\texttt{terminal} 标志的设置使得 IQL 训练中的 Bellman backup 不会在段边界处进行跨段的时序差分目标计算。
-
-\subsection{跨客户端的独立性保证}
-
-一个关键的工程设计决策是：transition 的构建严格按 \texttt{(clientId, segment\_id)} 分组进行，不同客户端之间、同一客户端的不同段之间绝不共享滑动窗口。这意味着如果某客户端的轨迹被切为 5 段，则每段独立产出 transition 并分别标记 terminal 标志。
-
-在 \texttt{main} 函数的主循环中，对每个 CSV 文件解析后按 \texttt{(clientId, segment\_id)} 执行 \texttt{groupby}，逐组调用 \texttt{build\_transitions\_for\_client}。各组产出的 \texttt{TransitionBatch} 中的观测、动作、奖励等列表合并入全局累积列表，同时每组的统计信息（CSV 路径、场景名、客户端 ID、段编号、原始行数、产出 transition 数量）记录到 manifest 中，便于事后回溯数据集的组成结构与各场景的贡献比例。
-
-\section{状态空间的归一化处理}
-
-\subsection{归一化的必要性分析}
-
-五个状态特征的原始量级存在数量级级别的差异：\texttt{send\_bps} 和 \texttt{recv\_bps} 的典型值为 $10^5 \sim 10^7$（bps），\texttt{rtt\_ms} 通常在 $10 \sim 500$ 范围内，\texttt{loss\_rate} 取值 $[0, 1]$，\texttt{jitter\_ms} 通常在 $1 \sim 50$ 范围内。若不进行归一化，神经网络输入层中吞吐量特征的绝对值将压倒其余四个特征对梯度的贡献，导致训练初期 Value 和 Q 网络难以有效学习延迟和丢包对决策的影响，进而产生次优策略。
-
-\subsection{固定尺度缩放与截断策略}
-
-本研究参考 Schaferct 竞赛冠军方案的处理风格，采用\textbf{固定尺度缩放 + 对称截断}的归一化策略（\texttt{schaferct\_fixed\_scale\_clip}），而非基于数据集统计量的动态 Z-score 或 Min-Max 归一化。该设计选择基于以下考量：
-
-\begin{enumerate}
-    \item \textbf{部署一致性}：训练时使用的归一化参数必须在推理阶段完全复现。若使用基于训练集均值/方差的 Z-score 归一化，则需在部署端存储并实时计算该统计量；而固定尺度系数是常数，推理端仅需读取 \texttt{norm.json} 即可硬编码。
-    \item \textbf{物理可解释性}：各缩放系数直接对应物理量级变换——吞吐量除以 $10^6$（bps→Mbps）、RTT 和 Jitter 除以 $10^2$（ms→百ms级标准化）、丢包率保持原值。归一化后各特征的典型量级均落在 $[0, 10]$ 以内。
-    \item \textbf{抗异常值鲁棒性}：截断到 $[-10, 10]$ 防止极端异常值（如瞬时 RTT spike 达到数千毫秒）产生过大的输入值，从而保护神经网络的数值稳定性。
-\end{enumerate}
-
-具体实现如下。首先构建特征缩放向量：
-
-\[
-\text{scale} = [10^{-6},\ 10^{-6},\ 10^{-2},\ 1.0,\ 10^{-2}]
-\]
-
-对每条 transition 的观测矩阵 $W_t \in \mathbb{R}^{5 \times 10}$，归一化操作为：
-
-\[
-\tilde{W}_t[i, j] = \text{clip}(W_t[i, j] \times \text{scale}[i],\ -10,\ +10), \quad i \in \{0,...,4\},\ j \in \{0,...,9\}
-\]
-
-归一化后的矩阵按 feature-major 展平为 50 维向量作为最终的状态输入。该操作对 \texttt{observations} 和 \texttt{next\_observations} 同时执行，确保 $(s_t, s_{t+1})$ 处于相同的数值空间中。
-
-\subsection{归一化元信息的持久化}
-
-归一化参数通过 \texttt{norm.json} 文件完整持久化，内容包括：
-
-\begin{itemize}
-    \item \texttt{state\_cols}：状态列名列表，用于推理端正确映射浏览器采集的 getStats 字段到对应特征通道；
-    \item \texttt{window\_size}：滑动窗口长度（10），推理端需维护相同长度的状态历史缓冲区；
-    \item \texttt{state\_dim}：状态向量维度（50），用于校验 ONNX 模型输入 shape；
-    \item \texttt{state\_layout}：展平方式（\texttt{feature\_major}），推理端需按相同顺序组织输入张量；
-    \item \texttt{state\_scales}：各特征的缩放系数；
-    \item \texttt{clip\_min} / \texttt{clip\_max}：截断范围；
-    \item \texttt{observations\_normalized}：布尔标志，标明 \texttt{.npz} 中的观测已经过归一化处理，训练脚本无需重复归一化。
-\end{itemize}
-
-该文件在训练阶段由 \texttt{train\_iql.py} 读取以验证输入维度，在推理阶段由 \texttt{serve\_policy.py}（方案 A）和 \texttt{policy\_runtime.js}（方案 B）读取以复现相同的归一化变换。
-
-\section{训练集的序列化与输出格式}
-
-\subsection{双格式输出策略}
-
-数据集构建脚本同时产出两种格式的训练数据：
-
-\textbf{NumPy 压缩格式（transitions.npz）}：这是 IQL 训练脚本直接消费的主格式。该文件以 NumPy 压缩存档形式存储以下数组：
-
-\begin{itemize}
-    \item \texttt{observations}：形状为 $(N, 50)$ 的 float32 数组，已归一化的当前状态；
-    \item \texttt{next\_observations}：形状为 $(N, 50)$ 的 float32 数组，已归一化的下一状态；
-    \item \texttt{actions}：形状为 $(N,)$ 的 float32 数组，原始 bps 单位的动作值；
-    \item \texttt{rewards}：形状为 $(N,)$ 的 float32 数组；
-    \item \texttt{terminals}：形状为 $(N,)$ 的 int8 数组；
-    \item 以及完整的归一化元信息字段（\texttt{state\_cols}、\texttt{state\_scales}、\texttt{clip\_min}、\texttt{clip\_max}、\texttt{window\_size}、\texttt{state\_dim}、\texttt{state\_layout}、\texttt{normalization\_method}、\texttt{observations\_normalized}）。
-\end{itemize}
-
-在本研究的实际产出中，$N = 109,393$，\texttt{.npz} 文件大小约 42 MB（压缩后），训练脚本通过 \texttt{np.load} 一次性加载至内存。
-
-\textbf{CSV 带元信息格式（transitions.csv）}：该文件在 NumPy 数组基础上附加了每条 transition 的来源元信息（CSV 文件路径、网络场景名、trace ID、客户端 ID、段编号、原始行索引、时间戳），便于后续的数据集审计——例如发现某条异常 transition 时，可直接回溯至原始 CSV 的对应行进行人工检查。
-
-\subsection{Manifest 统计表}
-
-除训练数据本身外，脚本还产出 \texttt{manifest.csv} 统计表，记录每个 \texttt{(csv, scenario, trace\_id, client\_id, segment\_id)} 组合的原始行数与产出 transition 数量。该表的作用包括：
-
-\begin{enumerate}
-    \item \textbf{数据集组成审计}：快速查看各网络场景贡献了多少 transition，判断数据集是否存在场景分布偏斜；
-    \item \textbf{清洗效果评估}：对比原始行数与产出 transition 数量，评估清洗管线的信息保留率；
-    \item \textbf{异常检测}：若某个 segment 的产出 transition 数远低于预期（如 300 行原始数据仅产出 10 条 transition），可能提示该段存在大量异常零点或该 CSV 采集过程存在故障。
-\end{enumerate}
-
-\section{数据集质量与统计特征}
-
-\subsection{整体规模}
-
-最终产出的离线强化学习训练数据集具有以下统计特征：
+最终本研究保留了“方案 A 作为算法调试与单机验证的辅助通道、方案 B 作为真实 A/B 测试的主干部署形态”的双栈架构。两种方案分别回答“模型逻辑是否符合预期”与“策略在真实 RTC 系统中能否带来 QoE 提升”两个不同维度的问题，二者的性能与适用场景对比见表\ref{tab:deployment-forms}。这一技术演进过程亦提示了一条普适经验：在实时控制系统中引入深度学习策略时，推理链路与被控系统的耦合关系必须作为架构设计的首要约束，不能等同于传统离线服务的部署思路。
 
 \begin{table}[htbp]
     \centering
-    \begin{tabular}{|l|l|}
+    \begin{tabular}{|l|l|l|}
         \hline
-        指标 & 数值 \\
+        维度 & HTTP/WebSocket 服务 & ONNX 浏览器本地 \\
         \hline
-        有效 transition 总数 & 109,393 \\
-        \hline
-        状态向量维度 & 50 (5 features × 10 steps) \\
-        \hline
-        动作空间范围 & [92,400 bps, 11,252,297 bps] \\
-        \hline
-        动作均值 & 1,208,773 bps (≈1.2 Mbps) \\
-        \hline
-        奖励范围 & [-1.65, +2.13] \\
-        \hline
-        奖励均值 & 0.155 \\
-        \hline
-        有效轨迹段数 & 1,191 \\
-        \hline
-        终止标志总数 & 867 \\
-        \hline
-        网络场景覆盖 & 3G, LTE, WiFi 等多场景 \\
+        推理延迟（LAN） & 5–20 ms & $<$1 ms \\
+        推理延迟（差网络） & 50–300 ms & $<$1 ms \\
+        与媒体流耦合 & 强耦合（共享信道） & 完全解耦 \\
+        调试能力 & 完整 & 受限 \\
+        部署依赖 & 需后端服务 & 仅需静态文件 \\
         \hline
     \end{tabular}
+    \caption{两种推理部署形态对比}
+    \label{tab:deployment-forms}
 \end{table}
 
-\subsection{数据集充分性讨论}
-
-对于离线强化学习而言，数据集规模和覆盖度是影响学得策略泛化能力的关键因素。109,393 条 transition 虽然相对于图像领域的大规模数据集而言并不庞大，但在网络拥塞控制领域已属于较为可观的样本量。原因在于：
-
-\begin{enumerate}
-    \item \textbf{状态空间的有效维度相对可控}：50 维输入经过 GRU 编码后的有效表征维度远低于原始维度，策略网络的学习复杂度主要取决于隐表征空间的复杂度而非原始输入维度；
-    \item \textbf{行为策略（GCC）本身具有较好的状态覆盖性}：GCC 的探测-退避机制天然地会访问从低带宽到高带宽的广泛状态区间，且自动网络场景切换脚本确保了不同拥塞程度下均有充分的样本覆盖；
-    \item \textbf{IQL 的保守性设计降低了对数据覆盖的要求}：不同于 off-policy 方法可能查询数据集中未出现的状态-动作对，IQL 通过期望回归机制仅从数据集中已有动作的上界进行策略提取，对分布外区域的依赖显著降低。
-\end{enumerate}
-
-\subsection{terminal 标志与分段训练的关系}
-
-数据集中共有 867 个 \texttt{terminal=1} 的标记，对应有效轨迹段末尾位置。该数值小于 manifest 记录的 1,191 段，差异来源于部分过短的段（行数 $< window\_size + 1 = 11$）在 transition 构建阶段被自然过滤，未产出任何有效样本。在 IQL 训练中，当 \texttt{terminal=1} 时，Bellman 方程退化为 $Q(s_T, a_T) = r_T$（不再加上折扣后的下一状态值），从而正确处理了轨迹终止处的价值估计。
+无论选择哪一形态，训练-部署一致性都是策略能否被忠实复现的前提。本研究通过三方面机制保障一致性：其一，状态归一化的尺度系数与截断范围同时存储于训练侧的 \texttt{norm.json} 与前端部署脚本中，确保两端的数值处理完全相同；其二，动作空间在训练与部署阶段均以 Mbps 为内部单位、仅在边界处与 bps 相互转换，避免单位混淆；其三，ONNX 导出后强制执行 PyTorch-ONNX 的输出对齐校验。
 
 \section{本章小结}
 
-本章系统阐述了面向离线强化学习的 WebRTC 拥塞控制训练数据集的完整构建方法。在状态表示设计方面，本章选取发送速率、接收速率、RTT、丢包率与抖动五个维度的网络度量，以长度为 10 的滑动窗口组织为 50 维特征向量，采用特征优先（Feature-Major）布局进行展平，既保留了单一指标的时序演化模式，又为神经网络提供了适于梯度优化的稠密输入表示。在动作定义方面，本章直接采用 GCC 算法输出的带宽预估值作为行为策略的动作标签，确保了离线数据与行为策略之间的对应关系。在奖励函数设计方面，本章构建了涵盖吞吐收益（对数函数）、延迟惩罚、丢包惩罚与动作平滑性约束的多目标 QoE 复合奖励，其权重配置经由多轮实验调整确定。在数据清洗层面，本章针对原始采集轨迹中普遍存在的异常零点、短时数据缺口与长断点问题，设计了基于上下文活跃度判定的无效值标记机制、短缺口线性插值修复策略以及长缺口处的 segment 分段逻辑，从根本上保障了状态窗口的连续性与训练样本的物理合理性。经上述流水线处理后生成的标准化四元组数据集，能够直接用于后续章节中 IQL 算法的离线策略训练。
+本章完整描述了基于 IQL 的拥塞控制模型从离线训练到在线部署的技术路径。在范式选择上，本章论证了离线强化学习相较于在线学习在 WebRTC 场景下的必要性，并阐释了 IQL 通过期望回归规避分布外动作评估的核心思想。在网络架构设计上，本章构建了线性编码—双层 GRU—残差块—Tanh 输出的高斯策略网络，并配以 Twin Q 与独立价值网络以抑制过估计。在训练流程上，本章通过期望回归（$\tau_{\text{IQL}}=0.7$）训练价值函数，以优势加权行为克隆（$\beta=3.0$）更新策略，并采用软目标更新与梯度裁剪保证数值稳定性，最终选取 NLL 作为主要离线验证指标以契合高斯策略的优化目标。在部署架构上，本章呈现了从“远端 Python 推理”到“浏览器端 ONNX 边缘推理”的工程演进，揭示了实时控制系统中推理链路与被控系统耦合关系的核心约束，并通过三类机制保证训练-部署一致性。上述工作使离线强化学习策略具备了在真实 WebRTC 通信链路中替代或增强 GCC 进行码率控制的工程能力，为下一章的在线 A/B 测试评估奠定了基础。

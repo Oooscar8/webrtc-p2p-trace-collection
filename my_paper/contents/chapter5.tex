@@ -1,624 +1,128 @@
-\chapter{基于 IQL 的拥塞控制模型训练与部署实现 }
-\label{chap:train_iql_model}
+\chapter{A/B 测试实验}
+\label{chap:ab-test}
 
-\section{离线强化学习训练框架的设计原则}
+本章在真实 WebRTC 端到端链路上对离线强化学习策略与浏览器默认 GCC 算法进行 A/B 对比实验，验证第五章所得 IQL 策略在真实网络中的有效性，并讨论其适用边界。
 
+\section{实验设计与数据采集}
 
-\subsection{从在线到离线的范式转变}
+本研究将浏览器端默认启用的 Google Congestion Control（GCC）作为对照组，将基于 IQL 训练得到的 Actor 策略作为实验组。两者的核心差异在于：GCC 依据接收端时延梯度与丢包反馈进行启发式调整，而 IQL 策略在每个控制周期根据状态窗口直接输出带宽上限，并通过 \texttt{RTCRtpSender.setParameters()} 施加为 \texttt{maxBitrate}，由此构成“策略输出—发送端限速—网络反馈—下一步决策”的闭环。为避免推理链路与媒体流共享网络信道导致控制滞后，A/B 测试统一采用浏览器端 ONNX 本地推理。
 
+为降低在线对比的试错成本，实验组的模型以离线验证集 NLL 最优为准则进行选择。考虑到高斯策略的训练目标与验证指标均以对数似然为核心，NLL 更能反映策略对离线数据分布的拟合质量；故选取 NLL 最低对应的 \texttt{checkpoint\_50000} 导出 \texttt{actor.onnx} 作为部署模型，以获得更稳定、可解释的策略行为。
 
-传统在线强化学习框架要求智能体在训练过程中与环境持续交互，通过试错机制逐步优化策略。然而，将这一范式直接应用于 WebRTC 拥塞控制场景面临根本性障碍：首先，实时视频通话系统对服务质量有着严苛的稳定性要求，任何在线探索过程中的策略崩溃都可能导致用户体验的严重退化，这在生产环境中是不可接受的；其次，网络拥塞状态空间的规模与复杂性使得从零开始的在线学习需要海量交互样本，训练周期难以控制；最后，在线学习引入的随机探索行为会与 GCC 等现有拥塞控制机制产生不可预测的耦合效应，使得训练信号的信噪比严重恶化。
-
-
-
-上述因素共同推动了从在线学习到离线学习的范式转变。离线强化学习（Offline Reinforcement Learning）的核心特征在于：策略训练完全依赖于预先收集的静态数据集，在整个学习过程中不再与环境发生任何交互。这一范式天然契合拥塞控制场景——WebRTC 平台在正常运营中已积累了海量的网络状态轨迹数据（RTT、吞吐量、丢包率等），这些数据隐含了 GCC 算法在真实网络环境下的决策逻辑与效果反馈。离线学习框架能够从这些历史数据中提取价值，无需冒在线探索的风险即可获得改进的策略。
-
-
-
-然而，离线学习并非没有代价。其核心挑战在于\textbf{分布偏移}（Distributional Shift）：当学得策略在测试时访问训练数据中未充分覆盖的状态-动作对时，价值函数估计可能产生严重偏差，进而导致策略在未见场景下表现失常。隐式 Q 学习（Implicit Q-Learning, IQL）算法正是为应对这一挑战而提出的解决方案之一——它通过期望回归机制仅从数据集中已出现动作的上界提取策略，避免了对分布外动作的价值评估，从而在不牺牲稳定性的前提下实现离线策略优化。
-
-
-
-\subsection{训练框架的整体架构}
-
-
-本研究设计的离线强化学习训练框架以 \texttt{rl/train\_iql.py} 脚本为核心，涵盖从训练集加载到模型持久化的完整流程。框架的模块化设计遵循以下原则：
-
-
-
-\begin{enumerate}
-    \item \textbf{数据抽象层}：通过 \texttt{ReplayBuffer} 类封装离线数据集的存储与采样逻辑，对外提供统一的 \texttt{sample(batch\_size)} 接口，使得训练循环不必关心底层数据组织细节；
-
-
-
-    \item \textbf{模型组件层}：将 IQL 算法的三大核心组件（策略网络、价值函数、Q 函数）分别实现为独立的 PyTorch 模块，便于消融实验与架构调整；
-
-
-
-    \item \textbf{训练控制器层}：\texttt{ImplicitQLearning} 类封装了完整的单步更新逻辑（价值回归、Q 函数更新、策略改进），并维护训练状态与超参数配置；
-
-
-
-    \item \textbf{持久化层}：支持训练中间状态的 checkpoint 保存与恢复，确保长时间训练任务的容错能力。
-
-
-
-\end{enumerate}
-该架构设计使得各层之间保持松耦合——例如，策略网络可以便捷地在 Gaussian 策略与 Deterministic 策略之间切换，而不影响上层训练循环；训练超参数通过命令行参数与配置文件双重管理，便于实验复现。
-
-
-
-\section{神经网络架构的设计与实现}
-
-
-\subsection{状态编码器与循环结构}
-
-
-拥塞控制任务的状态空间具有显著的时序依赖特性：当前时刻的网络度量值（RTT、吞吐量等）难以独立支撑合理的带宽决策，必须结合历史趋势进行综合判断。例如，RTT=50ms 这一孤立数值无法区分"延迟正在恶化"与"延迟正在恢复"两种截然不同的网络演化方向，而 10 步历史窗口则能够清晰揭示这一动态趋势。
+A/B 测试完全复用第四章 4.1.2 节定义的九类网络环境及其 \texttt{pfctl + dummynet} 参数配置。各静态场景的关键参数总览如图~\ref{fig:network-condition-parameter} 所示；其中 \texttt{fluctuating} 为动态时变场景，其参数沿时间轴的配置如图~\ref{fig:fluctuating-parameters} 所示，用于模拟带宽骤降与短时恢复等真实弱网波动。
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.7\textwidth]{figures/chapter5/5-1_GaussianPolicy.png}
-    \caption{GaussianPolicy 策略网络结构示意}
-    \label{fig:gaussian-policy-arch}
+    \includegraphics[width=0.95\textwidth]{figures/chapter6/network_condition_parameter.png}
+    \caption{网络场景参数总览（静态场景）}
+    \label{fig:network-condition-parameter}
 \end{figure}
-
-基于上述考量，本研究采用基于门控循环单元（Gated Recurrent Unit, GRU）的状态编码器架构，其整体结构如图~\ref{fig:gaussian-policy-arch} 所示。策略网络 \texttt{GaussianPolicy} 的前向计算流程如下：
-
-
-
-\begin{enumerate}
-    \item \textbf{线性编码层}：将 50 维 feature-major 展平状态向量映射到 256 维隐空间，激活函数为 ReLU；
-
-
-
-    \item \textbf{双层 GRU 序列建模}：对编码后的时序特征进行双向扫描，捕获跨时间步的长程依赖关系。GRU 的门控机制能够自适应地遗忘无关历史信息并保留关键趋势特征，相较于简单 RNN 显著缓解了梯度消失问题；
-
-
-
-    \item \textbf{中间全连接层}：将 GRU 输出映射到 256 维表示空间，为后续残差块做准备；
-
-
-
-    \item \textbf{残差块 1（rb1）}：包含两层线性变换 + LeakyReLU 激活的跳跃连接结构，增强深层网络的梯度流动；
-
-
-
-    \item \textbf{残差块 2（rb2）}：与 rb1 结构相同，进一步提取高阶特征表示；
-
-
-
-    \item \textbf{输出层}：将 256 维隐表示映射到 1 维动作空间，通过 Tanh 激活函数约束输出范围至 $[-1, 1]$，再乘以 \texttt{max\_action\_mbps} 得到最终带宽估计值（Mbps 单位）。
-
-
-
-\end{enumerate}
-残差连接的引入基于以下考量：当网络深度增加时，直接映射的学习难度会显著上升，而残差结构通过 $y = f(x) + x$ 的形式为梯度提供了一条"捷径"，使得深层网络至少不会比浅层网络表现更差。在拥塞控制策略学习中，残差结构还赋予网络一种"模仿 GCC 行为"的能力——当残差分支输出接近零时，策略输出等价于将隐状态直接传递，这对应于一种保守的基准行为。
-
-
-
-\subsection{高斯策略网络的输出分布}
-
-
-与确定性策略不同，高斯策略网络在给定状态 $s$ 时输出一个条件高斯分布 $\mathcal{N}(\mu(s), \sigma^2)$ 而非单一动作值。本研究实现中，策略网络的输出张量形状为 $(batch\_size, 2)$，其中前 1 维为均值 $\mu$，后 1 维为标准差 $\sigma$。
-
-
-
-标准差参数 $\sigma$ 不通过网络前向计算得到，而是作为独立的可学习参数 \texttt{log\_std} 存在。这一设计选择基于以下考量：
-
-
-
-\begin{enumerate}
-    \item \textbf{参数效率}：若标准差通过网络计算，则需要额外的计算开销与参数量；而将其作为全局参数，仅需 1 个标量即可建模策略的探索强度；
-
-
-
-    \item \textbf{稳定性}：独立的标准差参数可以在训练过程中通过简单截断（\texttt{LOG\_STD\_MIN=-20.0}，\texttt{LOG\_STD\_MAX=2.0}）严格控制数值范围，避免数值不稳定；
-
-
-
-    \item \textbf{可解释性}：标准差参数直接反映策略的"确定性程度"——训练早期较大的标准差允许更多探索，训练后期较小的标准差表明策略已收敛至确定性决策。
-
-
-
-\end{enumerate}
-在推理阶段，本研究默认采用均值 $\mu(s)$ 作为最终输出动作，忽略随机采样带来的方差。这一选择基于部署场景的实际需求：WebRTC 拥塞控制要求控制信号稳定可预测，随机抖动的带宽估计值可能导致视频编码器的码率配置频繁跳变，反而降低用户体验。
-
-
-
-\subsection{Twin Q 网络与价值函数}
-
-
-IQL 算法需要三个神经网络协同工作：策略网络 $\pi$、Q 函数 $Q(s,a)$、价值函数 $V(s)$。本研究采用 Twin Q 架构，即维护两个独立的 Q 网络 $Q_1$ 和 $Q_2$，在计算目标值时取两者的最小值 $Q(s,a) = \min(Q_1(s,a), Q_2(s,a))$。
-
-
-
-Twin Q 的设计动机在于抑制 Q 函数的过估计偏差。在离线学习中，Q 函数通过 Bellman 方程递归估计状态-动作对的价值，而训练数据中某些动作的稀缺可能导致 Q 函数在对应区域产生不可靠的高估。若策略基于此过估计的 Q 值进行优化，将严重偏离行为策略的支撑集，引发分布偏移问题。Twin Q 通过取最小值操作，在一定程度上抑制了这种过估计——两个独立初始化的 Q 网络同时过估计同一状态-动作对的概率较低。
-
-
-
-Q 网络和价值函数的实现均为简单的多层感知机（MLP）结构：输入状态（和动作）经两层 256 维全连接层映射到标量输出。这一相对轻量的架构选择基于以下考量：拥塞控制任务的输入特征维度较低（50 维），过深的网络容易过拟合训练数据中的噪声，反而损害泛化能力。
-
-
-
-\section{IQL 算法的训练流程实现}
-
-IQL 训练流程与损失构成如图~\ref{fig:iql-training-overview} 所示：左侧展示了策略网络、双 Q 网络与价值网络三者之间的数据流与梯度关系，右侧以伪代码形式给出了单步更新中价值回归、Q 函数更新与策略改进的执行顺序。
 
 \begin{figure}[htbp]
     \centering
-    \begin{minipage}{0.70\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/chapter5/5-2_three_network.png}
-    \end{minipage}\hfill
-    \begin{minipage}{0.29\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/chapter5/5-3_iql_false_code.png}
-    \end{minipage}
-    \caption{IQL 训练流程与损失构成示意}
-    \label{fig:iql-training-overview}
+    \includegraphics[width=0.95\textwidth]{figures/chapter6/fluctuating_paramters.png}
+    \caption{\texttt{fluctuating} 场景：参数时间轴}
+    \label{fig:fluctuating-parameters}
 \end{figure}
 
-\subsection{不对称 L2 损失与期望回归}
+实验链路在两台位于同一局域网的终端设备间建立 WebRTC P2P 连接，每次实验固定使用同一段本地视频以排除内容复杂度的干扰。分组采用随机 50/50 模式，使每次连接在会话开始阶段随机分配到 GCC 或 RL 组，从而降低人为选择偏差。前端通过 \texttt{getStats()} 周期性采集 WebRTC 关键统计量并以 CSV 形式上报落盘。所有场景均采集到对照组与实验组各 10 条 trace，每条 trace 由两端各生成一段 client 统计，单条有效持续时间约 5 分钟。整体测试流程见图~\ref{fig:ab-test-procedure}。
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\textwidth]{figures/chapter6/ab_test_procedure.png}
+    \caption{A/B 测试流程图}
+    \label{fig:ab-test-procedure}
+\end{figure}
 
-IQL 算法的核心创新在于采用\textbf{期望回归}（Expectile Regression）替代传统 Q 学习中的最大化操作。传统 Q 学习通过 $\max_a Q(s,a)$ 估计状态的价值，但在离线场景下，数据集中未出现的动作对应的 Q 值估计不可靠，直接最大化可能导致严重的过估计。
+\section{QoE 评价体系}
 
+为统一量化两种策略在真实链路中的表现，本研究对 A/B 测试采集到的 CSV 轨迹进行两级聚合：先以“单 CSV 文件 + 单 clientId”为单位计算每段会话的 QoE 指标，再按 \texttt{(scenario, ab\_group)} 取均值形成场景级汇总。
 
+评价从五个维度刻画策略性能：吞吐采用接收端 \texttt{recv\_bps} 的均值，时延采用 RTT 的 95 分位以反映尾部交互劣化，抖动采用 \texttt{jitter} 的 95 分位以刻画短时不稳定，丢包采用丢包率均值以反映链路可靠性，动作平滑性则通过有效发送上限 cap 的一阶差分绝对值均值（cap\_delta）刻画码率震荡程度。其中 cap 统一取 \texttt{estimated\_bw\_bps}，其表征的是策略给出的 \texttt{maxBitrate} 与 GCC 估计带宽的最小值，即编码器实际生效的发送上限，从而保证“动作平滑性”评价与真实控制量一致。
 
-IQL 的解决思路是：不估计 $Q(s,a)$ 的最大值，而是估计其高期望值。具体而言，价值函数 $V(s)$ 通过最小化以下不对称 L2 损失进行训练：
+综合 QoE 分数采用与第四章奖励函数一致的代理形式：
 
+$$
+\mathrm{QoE} = \log\left(1 + \frac{\mathrm{recv\_bps}}{10^6}\right) - \frac{\mathrm{rtt\_ms}}{1000} - \mathrm{loss\_rate} - 0.1 \cdot \frac{|\mathrm{cap}_t - \mathrm{cap}_{t-1}|}{10^6}
+$$
 
+该函数以对数项刻画吞吐收益的边际递减，并对时延、丢包与码率震荡施加线性惩罚，从而贴近实时视频通话对“稳定交互”的偏好。
 
-\[
-\mathcal{L}_V(\theta) = \mathbb{E}_{(s,a) \sim \mathcal{D}} \left[ L_2^\tau \left( Q_{\hat{\theta}}(s,a) - V_\theta(s) \right) \right]
-\]
+\section{实验结果与分析}
 
-
-
-其中不对称 L2 损失定义为：
-
-
-
-\[
-L_2^\tau(u) = |\tau - \mathbb{I}(u < 0)| \cdot u^2
-\]
-
-
-
-参数 $\tau \in (0, 1)$ 控制回归目标的位置——当 $\tau > 0.5$ 时，损失函数对正残差（$Q > V$）赋予更大权重，促使 $V(s)$ 收敛到 $Q(s,a)$ 分布的上分位数而非均值。本研究采用 $\tau = 0.7$，对应于估计 Q 值分布的 70\% 分位点。
-
-
-
-该设计的直观理解如下：在离线数据中，行为策略（GCC）在多数状态下可能采取了次优动作，但仍存在少量接近最优的动作样本。期望回归机制使得价值函数 $V(s)$ 能够自动识别这些"好动作"，而无需显式地遍历所有可能动作进行最大化。这正是 IQL 能够在不访问分布外动作的前提下实现策略改进的关键。
-
-
-
-\subsection{Q 函数的 Bellman 更新}
-
-
-Q 函数通过标准 Bellman 方程进行更新，目标值由当前 Q 网络（Target Q）与价值函数共同计算：
-
-
-
-\[
-y = r + \gamma (1 - d) V(s')
-\]
-
-
-
-其中 $r$ 为即时奖励，$\gamma$ 为折扣因子，$d$ 为终止标志，$V(s')$ 为下一状态的价值估计。值得注意的是，目标值计算使用的是价值函数 $V$ 而非 Q 函数——这一设计避免了"Bootstrapping from Q"引入的不稳定性，因为 $V(s')$ 已通过期望回归从数据集中提取了稳定的价值估计。
-
-
-
-Q 网络的损失函数为：
-
-
-
-\[
-\mathcal{L}_Q(\phi) = \mathbb{E}_{(s,a,r,s',d) \sim \mathcal{D}} \left[ \left( Q_\phi(s,a) - y \right)^2 \right]
-\]
-
-
-
-Twin Q 架构下，两个 Q 网络独立优化各自的损失，目标值计算取两者的最小值。目标 Q 网络通过软更新机制逐步追踪在线 Q 网络的参数：
-
-
-
-\[
-\theta_{\text{target}} \leftarrow (1 - \tau) \theta_{\text{target}} + \tau \theta_{\text{online}}
-\]
-
-
-
-本研究采用 $\tau = 0.005$ 的软更新系数，使得目标网络参数的变化足够平滑，避免训练过程中的震荡。
-
-
-
-\subsection{优势加权策略优化}
-
-
-策略网络通过\textbf{优势加权行为克隆}（Advantage-Weighted Behavior Cloning）进行优化。具体而言，策略损失函数为：
-
-
-
-\[
-\mathcal{L}_\pi(\psi) = \mathbb{E}_{(s,a) \sim \mathcal{D}} \left[ \exp(\beta \cdot A(s,a)) \cdot \mathcal{L}_{\text{BC}}(\pi_\psi, s, a) \right]
-\]
-
-
-
-其中优势函数 $A(s,a) = Q(s,a) - V(s)$ 反映了动作 $a$ 在状态 $s$ 下相对于平均水平的优劣程度；$\beta$ 为逆温度系数，控制对高优势动作的关注强度；$\mathcal{L}_{\text{BC}}$ 为行为克隆损失，对于高斯策略即为负对数似然：
-
-
-
-\[
-\mathcal{L}_{\text{BC}} = -\log \pi_\psi(a | s)
-\]
-
-
-
-该损失函数的设计思想如下：行为克隆（BC）简单地模仿训练数据中的动作，无法超越行为策略的性能上界；而优势加权机制通过指数权重 $\exp(\beta \cdot A)$ 为高优势动作赋予更大梯度，引导策略向数据集中"好动作"的方向优化。参数 $\beta$ 的选择至关重要——过大的 $\beta$ 会导致权重过度集中在少数极端样本上，引发训练不稳定；过小的 $\beta$ 则退化为普通 BC，无法有效提取策略改进。本研究采用 $\beta = 3.0$，在稳定性与改进性之间取得平衡。
-
-
-
-为防止权重爆炸，本研究将指数优势截断到最大值 100（\texttt{EXP\_ADV\_MAX = 100.0}），确保训练过程的数值稳定性。
-
-
-
-\subsection{训练超参数配置与调优}
-
-
-本研究采用的完整训练超参数配置如下：
-
-
+显著性检验以 trace 为单位进行双侧置换检验，文中 p 值均为 BH 校正后的结果。表~\ref{tab:ab-delta-summary} 给出各场景下 RL 相对于 GCC 的关键指标变化（百分比为相对变化率，QoE 以绝对差值表示）。
 
 \begin{table}[htbp]
     \centering
-    \begin{tabular}{|l|l|l|l|}
+    \small
+    \begin{tabular}{|l|c|c|c|c|c|}
         \hline
-        超参数 & 符号 & 取值 & 说明 \\
+        场景 & 吞吐变化 & RTT P95 变化 & 丢包率变化 & cap\_delta 变化 & QoE 差值（RL--GCC） \\
         \hline
-        训练步数 & $$T$$ & 300,000 & 总优化迭代次数 \\
-        批量大小 & $$B$$ & 512 & 每步更新采样的样本数 \\
-        折扣因子 & $$\gamma$$ & 0.99 & 未来奖励的折扣系数 \\
-        软更新系数 & $$\tau$$ & 0.005 & Target Q 网络更新速率 \\
-        期望回归参数 & $$\tau_{\text{IQL}}$$ & 0.7 & 价值函数回归的分位数 \\
-        逆温度系数 & $$\beta$$ & 3.0 & 优势加权强度 \\
-        学习率 & $$\eta$$ & 3e-4 & 所有网络的统一学习率 \\
-        梯度裁剪 & - & 1.0 & 防止梯度爆炸的阈值 \\
-        评估频率 & - & 5,000 & 验证与 checkpoint 间隔 \\
-        最大动作值 & - & ~12 Mbps & 动作空间的数值上界 \\
-        \hline
-    \end{tabular}
-    \caption{IQL 训练超参数配置}
-    \label{tab:iql-hparams}
-\end{table}
-
-
-
-部分超参数的选择依据如下：
-
-
-
-\textbf{折扣因子&nbsp;}$\gamma = 0.99$：拥塞控制决策的影响具有长期累积效应——当前时刻的带宽估计将在后续数秒内持续影响视频编码器的输出码率，进而影响网络队列状态与延迟。较高的折扣因子确保策略优化关注长期累积奖励而非短视的即时收益。
-
-
-
-\textbf{期望回归参数&nbsp;}$\tau = 0.7$：该参数位于 $(0.5, 1.0)$ 区间内，对应于估计 Q 值分布的 70\% 分位点。较高的 $\tau$ 值使策略更倾向于选择数据集中的高价值动作，但同时也增加了对数据噪声的敏感性。$\tau = 0.7$ 在两者之间取得了经验上的平衡。
-
-
-
-\textbf{最大动作值}：本研究采用训练数据集中动作值的 99.5\% 分位点乘以 1.05 倍作为最大动作值（约 12 Mbps），确保策略网络输出的带宽估计值覆盖训练数据中的绝大部分场景，同时避免对极端异常值的过拟合。
-
-
-
-\subsection{训练循环与收敛监控}
-
-
-训练过程采用标准的离线强化学习训练循环：每步从 ReplayBuffer 中随机采样一个 batch，依次执行价值函数更新、Q 函数更新、策略网络更新，并定期执行 Target Q 网络的软更新。训练过程中的关键损失曲线如图~\ref{fig:training-loss-curves} 所示，Actor 的学习曲线如图~\ref{fig:actor-learning-curve} 所示。
-
-\begin{figure}[htbp]
-    \centering
-    \begin{minipage}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/chapter5/5-4_loss_curse.png}
-    \end{minipage}\hfill
-    \begin{minipage}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{figures/chapter5/5-5_NLL curve.png}
-    \end{minipage}
-    \caption{训练过程关键损失曲线}
-    \label{fig:training-loss-curves}
-\end{figure}
-
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.75\textwidth]{figures/chapter5/5-6_Actor_learning_curve.png}
-    \caption{Actor 学习曲线示意}
-    \label{fig:actor-learning-curve}
-\end{figure}
-
-训练过程中的关键监控指标包括：
-
-
-
-\begin{itemize}
-    \item \textbf{Q Loss}：Q 网络预测值与 Bellman 目标值之间的均方误差，反映 Q 函数的拟合质量；
-
-
-
-    \item \textbf{Value Loss}：价值函数的不对称 L2 损失，反映期望回归的收敛情况；
-
-
-
-    \item \textbf{Actor Loss}：策略网络的加权行为克隆损失，反映策略优化的进展；
-
-
-
-    \item \textbf{Q Score}：Q 网络输出的平均值，用于检测 Q 函数是否出现异常高估或崩溃。
-
-
-
-\end{itemize}
-每 5,000 步执行一次验证评估，在预留的验证集上计算策略输出的均方误差（MSE）与负对数似然（NLL），并保存当前 checkpoint。验证指标用于判断训练是否收敛、是否需要早停或调整超参数。
-
-
-
-\section{模型持久化与训练产物}
-
-
-\subsection{Checkpoint 机制与恢复训练}
-
-
-长时间训练任务面临中断风险（硬件故障、进程被杀、主动停止等），因此必须支持训练状态的完整持久化与恢复。本研究实现的 checkpoint 机制保存以下内容：
-
-
-
-\begin{itemize}
-    \item \textbf{actor.pt}：策略网络的完整参数字典，用于推理部署；
-
-
-
-    \item \textbf{critics.pt}：Twin Q 网络与 Target Q 网络的参数，用于恢复训练时的 Q 函数状态；
-
-
-
-    \item \textbf{trainer.pt}：完整的训练状态，包括优化器动量、学习率调度器状态、当前训练步数等，支持无缝恢复训练；
-
-
-
-    \item \textbf{norm.json}：训练数据的元信息，包括状态维度、窗口大小、归一化参数等，推理阶段必须与训练阶段保持一致。
-
-
-
-\end{itemize}
-所有 checkpoint 文件按训练步数命名并存放在独立子目录中（如 \texttt{checkpoint\_50000/}），便于事后追溯不同训练阶段模型的性能表现。
-
-
-
-\subsection{训练配置的可复现性}
-
-
-为确保实验的可复现性，训练脚本将所有超参数配置导出至 \texttt{train\_config.json} 文件，包括数据集路径、随机种子、设备选择、各网络学习率、折扣因子、批量大小等完整配置。恢复训练或复现实验时，只需加载该配置文件即可精确还原训练环境。
-
-
-
-此外，脚本还通过 \texttt{set\_seed()} 函数固定 Python、NumPy、PyTorch 的随机种子，并在支持确定性算法的平台上启用 \texttt{torch.use\_deterministic\_algorithms()}，最大程度地消除随机性对实验结果的影响。
-
-
-
-\section{模型部署与推理管线}
-
-
-\subsection{部署场景的多样性需求}
-
-
-拥塞控制策略的部署场景存在显著差异，对推理管线提出了不同的约束条件。本研究设计了两种互补的部署形态，分别适用于开发调试与生产环境：
-
-
-
-\textbf{方案 A：远端 Python HTTP/WebSocket 推理服务}。该形态将训练好的 PyTorch 模型部署在服务端，通过 HTTP POST 或 WebSocket 连接接收浏览器上报的状态向量，在服务端完成前向推理后返回带宽估计值。该形态的优势在于：（1）训练与推理使用完全相同的 PyTorch 运行时，不存在算子兼容性问题；（2）服务端可挂载完整的调试工具链（TensorBoard、断点、日志），便于排查策略异常；（3）支持模型热更新，无需重新部署前端。其劣势在于推理请求必须经过网络往返，引入不可控的延迟——当网络状况恶化时，推理请求本身可能被阻塞，导致控制信号滞后。
-
-
-
-\textbf{方案 B：浏览器本地 ONNX 边缘推理}。该形态将 PyTorch 模型导出为 ONNX 格式，前端通过 \texttt{onnxruntime-web} 库在浏览器本地完成推理。该形态的优势在于：（1）推理延迟压缩至亚毫秒级，不受网络状况影响；（2）控制闭环与被测媒体流完全解耦，实验信号干净；（3）部署仅需静态文件服务器，无需后端服务。其劣势在于 ONNX 导出过程可能引入算子兼容性问题，且浏览器端的调试能力有限。
-
-
-
-\textbf{在研究的初期阶段}，本文优先实现了方案 A（远端 Python HTTP/WebSocket 推理）。这一选择出于三方面的考量：首先，IQL 算法刚完成训练，模型结构与输入输出约定仍处于频繁调整状态，Python 服务端的直接模型加载与丰富调试工具链能够显著加速算法迭代；其次，HTTP/WebSocket 接口对前端开发者而言透明直观，便于在不引入任何浏览器端 ML 运行时的前提下快速验证“采集—训练—部署”全链路的逻辑正确性；再者，服务端集中管理滑动窗口与归一化参数，规避了早期阶段前后端状态不一致的排障成本。方案 A 成功帮助本文完成了模型输入输出约定对齐、动作平滑逻辑验证、fallback 保护机制检验等关键早期任务。
-
-
-
-\textbf{然而，在将方案 A 投入真实 A/B 测试场景时，一个根本性的工程矛盾迅速暴露。}本研究的 A/B 测试核心目标是验证 RL 策略在\textbf{差网络环境}（\texttt{3g}、\texttt{high\_delay}、\texttt{fluctuating} 等）下相对于 GCC 的增益。但实验中观察到一个反直觉的现象：越是劣化的网络条件下，RL 实验组的表现反而越不稳定，甚至在某些场景下不及 GCC 基线。深入分析后发现，问题的根源并非模型本身，而是\textbf{推理请求所依赖的 TCP/WebSocket 链路与正在被测试的 WebRTC 媒体链路共享了同一条物理信道}。当信道进入拥塞状态时，推理请求自身遭遇了显著的排队延迟甚至丢包重传，导致策略决策在真正需要快速响应的时刻反而出现了数十毫秒甚至上百毫秒的滞后。更严重的是，这种滞后使得模型输出的目标码率始终基于“过时”的网络状态，与 RTCP 反馈的当前真实状态出现相位错位，反而可能在网络恢复时做出错误的保守决策，或在网络恶化时反应不及。
-
-
-
-\textbf{这一发现驱动本研究转向方案 B（浏览器本地 ONNX 边缘推理）}。通过引入 \texttt{onnxruntime-web}、完成 \texttt{actor.pt} 到 \texttt{actor.onnx} 的计算图导出与一致性校验，并在 \texttt{policy\_runtime.js} 中重建了与训练侧语义对齐的因果特征清洗与归一化流水线，本文成功将完整的控制回路封闭于浏览器进程内部。迁移之后，推理延迟从方案 A 在差网络下的数十至上百毫秒骤降至亚毫秒级，且与底层信道状态完全解耦。A/B 测试的评估结果也随之变得稳定且可解释——RL 策略在差网络场景下的真实增益得以清晰显现，而不再被推理链路自身的延迟噪声所掩盖。
-
-
-
-\textbf{综合而言}，本研究最终形成了“方案 A 作为算法调试与单机验证的辅助通道，方案 B 作为真实 A/B 测试的主干部署形态”的双栈架构。两种方案共存并非冗余，而是分别服务于“算法正确性验证”与“工程性能验证”两个截然不同的实验维度：方案 A 回答“模型逻辑是否符合预期”，方案 B 回答“策略在真实 RTC 系统中能否带来 QoE 提升”。这一技术选型的演进过程也为后续研究者提供了一条重要经验——\textbf{在实时控制系统中引入深度学习策略时，推理延迟与被控系统的耦合关系必须作为架构设计的首要约束，而不能等同于传统离线服务的部署思路}。
-
-
-
-\subsection{ONNX 模型导出与验证}
-
-
-ONNX（Open Neural Network Exchange）是一种开放的神经网络交换格式，支持在不同深度学习框架之间迁移模型。本研究通过 \texttt{tools/export\_iql\_onnx.py} 脚本将训练好的 PyTorch 策略网络导出为 ONNX 格式，其整体流程与一致性校验方式如图~\ref{fig:onnx-export} 所示，具体步骤如下：
-
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.9\textwidth]{figures/chapter5/5-7_onnx_output.png}
-    \caption{ONNX 模型导出与一致性校验流程}
-    \label{fig:onnx-export}
-\end{figure}
-
-\begin{enumerate}
-    \item \textbf{模型加载}：从 \texttt{actor.pt} 文件加载策略网络参数，从 \texttt{norm.json} 文件读取模型元信息（状态维度、动作范围、策略类型等）；
-
-
-
-    \item \textbf{网络构建}：根据元信息构建 \texttt{GaussianPolicy} 或 \texttt{DeterministicPolicy} 实例，加载参数并切换至评估模式；
-
-
-
-    \item \textbf{导出执行}：调用 \texttt{torch.onnx.export()} 将模型计算图导出为 ONNX 格式，指定 opset\_version=17 以支持最新的算子集；
-
-
-
-    \item \textbf{一致性验证}：使用 ONNX Runtime 加载导出的模型，对比 PyTorch 与 ONNX 在相同输入下的输出差异，确保截断误差控制在 $10^{-5}$ 以内。
-
-
-
-\end{enumerate}
-ONNX 导出的关键挑战在于处理 GRU 层的序列建模特性。PyTorch 的 GRU 实现在导出时会自动展开为等价的计算图，无需额外处理。但需注意输入张量的形状约定——本研究采用 $(1, 1, state\_dim)$ 的三维输入格式，其中第一维为 batch size（推理时固定为 1），第二维为序列长度（推理时固定为 1，表示单步推理），第三维为特征维度。
-
-
-
-\subsection{浏览器本地推理引擎}
-
-
-前端推理引擎封装在 \texttt{policy\_runtime.js} 模块中，其在浏览器端的控制回路结构如图~\ref{fig:policy-runtime} 所示，主要功能包括：
-
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.9\textwidth]{figures/chapter5/5-8_policy_runtime.png}
-    \caption{浏览器端 ONNX 推理与控制回路结构}
-    \label{fig:policy-runtime}
-\end{figure}
-
-\begin{enumerate}
-    \item \textbf{状态窗口维护}：维护最近 10 步的网络状态历史缓冲区，按 feature-major 顺序组织；
-
-
-
-    \item \textbf{在线数据清洗}：对浏览器采集的实时 getStats 数据执行轻量级清洗（异常零点处理、短缺失插值），与离线训练数据的清洗逻辑保持一致；
-
-
-
-    \item \textbf{状态归一化}：使用与训练阶段相同的固定尺度系数对状态向量进行缩放与截断；
-
-
-
-    \item \textbf{ONNX 推理}：通过 \texttt{onnxruntime-web} 库调用 ONNX 模型进行前向计算，输出带宽估计值（Mbps 单位）；
-
-
-
-    \item \textbf{动作后处理}：将策略输出从 Mbps 转换为 bps，并施加最小值约束（不低于 10 bps）以保证数值稳定性。
-
-
-
-\end{enumerate}
-推理引擎的关键设计决策是将状态归一化逻辑完全内嵌至前端 JavaScript 代码中，而非依赖服务端计算。这确保了前端推理与训练阶段的数值处理完全一致，避免了因归一化参数不一致导致的策略行为偏差。
-
-
-
-\subsection{HTTP/WebSocket 推理服务}
-
-
-作为调试通道，本研究实现了基于 FastAPI 的推理服务 \texttt{rl/serve\_policy.py}，提供以下接口：
-
-
-
-\begin{itemize}
-    \item \textbf{POST /predict}：接收 JSON 格式的状态向量，返回带宽估计值；
-
-
-
-    \item \textbf{WS /ws}：WebSocket 长连接，支持连续的状态上报与推理响应，避免 HTTP 握手开销。
-
-
-
-\end{itemize}
-服务端为每个连接维护独立的状态窗口缓冲区，按 \texttt{peer\_id} 隔离不同客户端的推理状态。这一设计确保了多客户端并发访问时各会话的独立性。
-
-
-
-该服务的核心价值在于提供了一条"可见可调试"的推理路径——当策略行为异常时，服务端可输出完整的输入状态、归一化后的张量、策略输出等中间信息，便于快速定位问题根源。而浏览器本地的 ONNX 推理路径由于缺乏调试工具，排查问题需要修改前端代码并重新部署，效率较低。
-
-
-
-\section{训练效果评估与部署验证}
-
-
-\subsection{离线验证指标}
-
-在训练过程中，本研究通过预留的验证集（占训练数据 10\%）评估策略网络的拟合质量。关键指标包括：
-
-\begin{itemize}
-    \item \textbf{均方误差（MSE）}：以策略网络输出的均值 $\mu(s)$ 与数据集中行为策略动作 $a$ 的平方误差均值衡量回归偏差。该指标便于直观观察均值拟合程度，但不刻画不确定性。
-    \item \textbf{负对数似然（NLL）}：将策略网络输出的高斯分布参数 $(\mu,\sigma)$ 代入 $\pi(a|s)=\mathcal{N}(\mu(s),\sigma(s)^2)$，计算动作 $a$ 在该分布下的 $-\log \pi(a|s)$。较低的 NLL 表示策略分布对数据动作的解释能力更强。
-\end{itemize}
-
-本研究中将 NLL 作为主要离线验证指标，原因在于 Actor 采用 \texttt{GaussianPolicy} 形式，策略网络输出的不仅是动作均值，还包含可学习的标准差（通过 \texttt{log\_std} 参数映射）。在这种设置下，策略更新的目标本质是最大化数据集中动作在当前策略分布下的对数似然，因此验证阶段沿用同一概率意义上的度量可以更一致地反映训练目标的优化程度。
-
-对于一维动作，高斯策略的 NLL 可写为：
-\[
-\text{NLL}(s,a)= -\log \pi(a|s)=\frac{1}{2}\left(\frac{a-\mu(s)}{\sigma(s)}\right)^2 + \log \sigma(s) + \frac{1}{2}\log(2\pi).
-\]
-该形式同时惩罚“均值偏差”与“方差估计不合理”两类问题：若仅使用 MSE，相当于隐含假设方差为常数、忽略了策略的不确定性表达，无法区分“均值拟合差”与“通过增大方差掩盖误差”的不同情形。因此，在高斯策略网络的离线训练与验证中，NLL 更适合作为主要收敛监控指标。
-
-需强调的是，离线验证指标仅反映策略对行为策略的模仿程度，而非策略在真实环境中的性能。真正的策略评估会通过后文在线 A/B 测试完成。
-
-
-\subsection{从训练到部署的一致性保证}
-
-
-训练-部署一致性是机器学习系统工程中的经典挑战。本研究通过以下机制确保训练阶段学得的策略在部署阶段能够被完整复现：
-
-
-
-\begin{enumerate}
-    \item \textbf{归一化参数硬编码}：状态归一化的尺度系数与截断范围同时存储在 \texttt{norm.json} 与前端 \texttt{policy\_runtime.js} 中，确保两端的数值处理完全一致；
-
-
-
-    \item \textbf{动作空间对齐}：训练时动作以 Mbps 为单位输入网络（原始 bps 值除以 $10^6$），部署时同样将策略输出乘以 $10^6$ 转换回 bps，避免单位混淆；
-
-
-
-    \item \textbf{模型格式验证}：ONNX 导出后自动执行 PyTorch-ONNX 输出对比验证，确保导出过程未引入数值偏差；
-
-
-
-    \item \textbf{端到端集成测试}：在 A/B 测试前，使用预录制的网络轨迹作为输入，对比方案 A（HTTP 服务）与方案 B（ONNX 本地）的输出差异，确保两种部署形态行为一致。
-
-
-
-\end{enumerate}
-\subsection{部署形态的性能对比}
-
-
-两种部署形态在实际场景下的性能对比如下：
-
-
-
-\begin{table}[htbp]
-    \centering
-    \begin{tabular}{|l|l|l|}
-        \hline
-        维度 & HTTP/WebSocket 服务 & ONNX 浏览器本地 \\
-        \hline
-        推理延迟（LAN） & 5–20 ms & $<$1 ms \\
-        推理延迟（差网络） & 50–300 ms & $<$1 ms \\
-        与媒体流耦合 & 强耦合（共享网络信道） & 完全解耦 \\
-        调试能力 & 完整（日志、断点、监控） & 受限（仅输入输出） \\
-        部署依赖 & 需后端服务 & 仅需静态文件 \\
-        状态隔离 & 需显式实现 \texttt{peer\_id} 映射 & 天然隔离（每 Tab 独立） \\
+        baseline & -18.19\% & 0.00\% & 0.00\% & -42.64\% & -0.137 \\
+        3g & -3.65\% & -12.42\% & -19.10\% & -73.13\% & +0.054 \\
+        dsl & -8.00\% & -7.05\% & -9.02\% & -50.07\% & -0.019 \\
+        lte & -3.57\% & -10.82\% & -19.02\% & -73.36\% & +0.189 \\
+        low\_bw & -3.17\% & -12.17\% & -19.02\% & -72.77\% & +0.062 \\
+        high\_delay & -3.64\% & -11.81\% & -18.97\% & -70.59\% & +0.067 \\
+        high\_loss & -3.71\% & -11.68\% & -19.01\% & -70.81\% & +0.018 \\
+        fluctuating & -8.27\% & -6.42\% & -9.07\% & -46.06\% & -0.052 \\
+        very\_bad & -23.55\% & -16.25\% & -25.14\% & -59.97\% & +0.055 \\
         \hline
     \end{tabular}
-    \caption{两种推理部署形态对比}
-    \label{tab:deployment-forms}
+    \caption{各场景下 RL 相对于 GCC 的关键指标变化}
+    \label{tab:ab-delta-summary}
 \end{table}
 
+图~\ref{fig:qoe-score}、\ref{fig:rtt-p95} 与 \ref{fig:loss-rate} 给出各场景下 QoE、RTT P95 与丢包率的分布；图~\ref{fig:cap-delta-cdf} 与图~\ref{fig:throughput-delay-tradeoff} 进一步展示 cap\_delta 全场景 CDF 与吞吐-时延权衡关系。
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/chapter6/qoe_score.png}
+    \caption{QoE 分数分布}
+    \label{fig:qoe-score}
+\end{figure}
 
-该对比清晰揭示了为何在差网络场景的 A/B 测试中必须采用浏览器本地推理——当网络带宽受限时，HTTP 推理请求与被测媒体流争抢同一物理信道，推理延迟的膨胀将直接导致控制信号滞后，形成"控制滞后 → 拥塞加剧 → 推理更慢"的恶性循环。
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/chapter6/rtt_p95.png}
+    \caption{RTT P95 分布}
+    \label{fig:rtt-p95}
+\end{figure}
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/chapter6/loss_rate.png}
+    \caption{丢包率分布}
+    \label{fig:loss-rate}
+\end{figure}
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/chapter6/cap.png}
+    \caption{cap\_delta 分布 CDF（全场景合并）}
+    \label{fig:cap-delta-cdf}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/chapter6/throughtput_delay_tradeoff.png}
+    \caption{吞吐-时延权衡散点图}
+    \label{fig:throughput-delay-tradeoff}
+\end{figure}
+
+整体来看，结果可归纳为三点。其一，动作平滑性在所有场景中均显著下降，下降幅度集中在 42\%--73\%，且 p 值均不超过 0.0012，统计稳健性较强；图~\ref{fig:cap-delta-cdf} 中 RL 组分布整体左移，表明大幅码率跳变出现概率显著降低，能够有效抑制 GCC 在弱网反馈噪声下的“升降—回退”振荡。其二，RTT P95 与丢包率在多数弱网场景中同步降低，3g、lte、low\_bw、high\_delay 与 very\_bad 场景的 RTT P95 下降约 10\%--16\%，丢包率下降约 18\%--25\%，说明策略倾向于通过保守限速避免排队积压；其中 high\_delay、low\_bw 与 lte 场景的 RTT P95 下降已达显著（p 分别为 0.028、0.037、0.026），very\_bad 场景接近显著（p=0.051）。其三，吞吐在多数场景仅有小幅下降，但在 baseline 与 very\_bad 场景出现明显的带宽利用不足；baseline 场景在 RTT 与丢包基本不变的情况下吞吐下降 18\%，QoE 下降 0.137，反映当前策略在高质量网络下存在过度限速倾向。图~\ref{fig:throughput-delay-tradeoff} 印证了该结论：RL 组样本整体向“较低时延、略低吞吐”方向偏移。
+
+进一步聚焦代表性场景。LTE 场景中 RL 将 RTT P95 由 1410 ms 降至 1258 ms，cap\_delta 降低 73\%，综合 QoE 提升 +0.189（p=0.051），可视为收益最明显的“中等带宽 + 较高时延”场景。high\_delay 与 low\_bw 场景中 RL 在吞吐仅下降约 3\% 的前提下显著改善 RTT、丢包与动作平滑性，体现策略以交互稳定性为优先目标的控制偏好。fluctuating 场景中 RL 虽仍降低 RTT 与动作波动，但吞吐下降 8\% 且 QoE 略低于 GCC，其原因在于离线训练数据主要来源于 GCC 行为轨迹，策略对“快速恢复阶段的激进探测”学习不足，加之部署侧引入的 EMA 平滑与单步限幅进一步降低了带宽骤增时的响应速度。
+
+\section{适用性与局限性}
+
+综合上述结果，本文方案的优势体现在三方面。首先，离线强化学习直接利用 GCC 历史轨迹训练策略，避免了在线探索对真实通话造成的质量扰动，并通过 ONNX 与浏览器本地推理形成“采集—训练—部署—验证”的可重复工程闭环，部署风险较低。其次，策略在所有场景下均显著降低 cap\_delta，输出更平滑的带宽上限，有助于减少编码器频繁调参带来的画面抖动，并降低振荡对排队时延与丢包的放大效应。再次，在多类弱网场景中策略呈现一致的降时延与降丢包趋势，体现出对排队积压的主动抑制能力，与离线奖励函数的设计目标相吻合。
+
+由此可推得本方案的适用边界。在 \texttt{3g}、\texttt{lte}、\texttt{low\_bw}、\texttt{high\_delay} 与 \texttt{very\_bad} 等存在带宽瓶颈、高时延或随机丢包的弱网环境下，IQL 策略通过保守且平滑的码率调节获得稳定的 RTT 尾部与丢包率收益，因而尤其适合在线会议、云游戏、远程控制等对交互实时性与稳定性要求高于峰值吞吐的业务。反之，在 \texttt{fluctuating} 这类容量能够快速恢复的场景或大文件传输、超高清点播等以最大化带宽利用率为核心目标的业务中，本模型的保守倾向会限制带宽探测能力，需要通过调整奖励权重或补充高带宽样本进行再训练后再行考虑部署。
+
+本方案仍存在若干局限。其一，QoE 评价函数仅由吞吐、RTT、丢包与动作波动构成，尚未直接覆盖帧率、分辨率切换、卡顿时长等主观体验因素，与真实 MOS 的映射关系仍需进一步验证。其二，每个场景仅含 10 条 trace，且终端类型、浏览器版本与视频内容相对固定，部分指标的统计显著性不足，更大规模与更异构条件下的泛化能力仍待补充验证。其三，baseline 场景的实验结果表明当前奖励权重下策略存在过度保守的倾向，后续可通过引入带宽利用率约束、场景自适应调权或在训练阶段补充高带宽样本加以缓解。其四，离线强化学习本质上仍从行为策略数据中外推决策边界，当真实网络出现训练数据未覆盖的组合模式时，策略可能产生不可预期动作，因此部署侧仍需保留 OOD 检测、动作限幅与回退机制以保障安全性。
 
 \section{本章小结}
 
-
-本章详细描述了基于隐式 Q 学习（IQL）的拥塞控制模型从离线训练到在线部署的完整技术路径。在网络架构设计方面，本章构建了包含编码器、双层 GRU 时序建模、残差全连接块与 Tanh 输出层的高斯策略网络（GaussianPolicy），配合双 Q 网络（TwinQ）与独立价值网络（ValueFunction），共同构成了 IQL 算法的 Actor-Critic 训练框架。在训练配置方面，本章采用非对称期望损失（expectile τ=0.7）进行价值函数回归，使用优势加权行为克隆（β=3.0）更新策略网络，并通过 soft target 更新（τ=0.005）、梯度裁剪（max\_norm=1.0）以及分离的学习率调度确保训练过程的数值稳定性。在模型导出环节，本章将训练得到的 Actor 网络经由 PyTorch 的 ONNX 导出接口转换为平台无关的 ONNX 计算图，并通过 PyTorch/ONNX Runtime 输出一致性校验确认数值精度。在在线推理部署方面，本章实现了远端 Python 推理服务（基于 FastAPI，支持 HTTP 与 WebSocket 双协议）与浏览器端 ONNX 本地推理两种方案，并在推理管线中集成了状态归一化、滑动窗口维护、非对称 EMA 动作平滑、单步变化限幅以及分布外（OOD）安全回退等控制保护机制，确保模型输出在真实网络环境中的稳定性与安全性。上述训练与部署体系的完整实现，使得离线强化学习策略具备了在实际 WebRTC 通信链路中替代或增强 GCC 算法进行码率控制的工程能力。
+本章基于真实 WebRTC 端到端平台构建了覆盖九类典型网络条件的 A/B 测试流程，并以可复现的 QoE 指标体系系统比较了 GCC 与离线强化学习策略。实验结果表明，IQL 策略在多数弱网场景中显著降低码率动作波动并稳定改善 RTT 尾部与丢包率，从而在 LTE、低带宽与高时延等场景获得正向 QoE 收益；与此同时，策略在高质量网络与部分动态恢复场景中存在带宽利用不足，提示后续需在奖励权重、训练数据覆盖与安全约束之间进一步权衡与优化。
